@@ -13,10 +13,12 @@ import {
   ADMIN,
   MESSAGES,
   MAX_MESSAGE_LENGTH,
+  MediaKind,
   WireMessage,
   chatIdFor,
   emailOf,
   isBroadcast,
+  mediaLabelOf,
 } from '@/lib/contract';
 import {
   createDocument,
@@ -34,6 +36,13 @@ type SendBody = {
   text?: string;
   /** A file the panel already uploaded through /api/upload. */
   fileId?: string | null;
+  /** What that file is. The upload route already told us; this repeats it. */
+  kind?: MediaKind | null;
+  mime?: string | null;
+  /** How long a recording runs, for the player's duration line. */
+  durationMs?: number | null;
+  /** What the file weighed. */
+  bytes?: number | null;
 };
 
 export const POST = async (request: NextRequest) => {
@@ -54,30 +63,43 @@ export const POST = async (request: NextRequest) => {
     const fileId = body.fileId?.trim() || null;
     if (!text && !fileId) {
       return Response.json(
-        {error: 'Type a message or attach a screenshot'},
+        {error: 'Type a message, attach a screenshot or record one'},
         {status: 400},
       );
     }
 
+    const kind = fileId ? body.kind || null : null;
     const announcement = isBroadcast(chatId);
     const data: WireMessage = {
       chat_id: chatId,
       from: ADMIN,
       // Announcements are addressed to everyone, in one shared thread.
       to: announcement ? 'all' : emailOf(chatId),
-      text: text || 'Screenshot attached',
+      // A recording usually travels without words, so the message says what it
+      // is: the app's list, and the panel's own preview, read this.
+      text: text || mediaLabelOf({file_id: fileId, media_kind: kind}),
       sent_at: new Date().toISOString(),
       // The recipient's receipt, false until they look. The app flips this on
       // the team's messages when the user opens the chat, which is what turns
       // the panel's own tick blue.
       read: false,
-      image: fileId ? fileUrl(fileId) : null,
+      // `image` keeps its old meaning — the download url of a picture. Anything
+      // else carries only its file id, which is what a player needs.
+      image: kind === 'image' && fileId ? fileUrl(fileId) : null,
       file_id: fileId,
+      media_kind: kind,
+      mime: fileId ? body.mime || null : null,
+      media_ms: fileId && Number.isFinite(Number(body.durationMs))
+        ? Math.round(Number(body.durationMs))
+        : null,
+      media_bytes: fileId && Number.isFinite(Number(body.bytes))
+        ? Math.round(Number(body.bytes))
+        : null,
     };
 
     const stored = await createDocument<WireMessage>(MESSAGES, data);
     return Response.json(
-      {id: stored.id, sent_at: data.sent_at, chatId, announcement},
+      {id: stored.id, sent_at: data.sent_at, chatId, announcement, kind},
       {status: 201},
     );
   } catch (error) {

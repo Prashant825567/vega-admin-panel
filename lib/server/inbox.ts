@@ -22,6 +22,8 @@ import {
   isBroadcast,
   isFromTeam,
   isUnreadForTeam,
+  mediaKindOf,
+  mediaLabelOf,
 } from '../contract';
 import {queryAll} from '../zentra';
 
@@ -39,7 +41,7 @@ const previewOf = (message: WireMessage): string => {
   if (text) {
     return text.length > 140 ? `${text.slice(0, 137)}…` : text;
   }
-  return message.file_id ? '📷 Screenshot' : '(empty message)';
+  return mediaLabelOf(message) || '(empty message)';
 };
 
 /**
@@ -77,7 +79,7 @@ export const loadConversations = async (): Promise<InboxResult> => {
         lastText: '',
         lastAt: 0,
         lastFrom: 'user',
-        hasImage: false,
+        lastMedia: null,
         unread: 0,
         total: 0,
       } satisfies Conversation);
@@ -92,7 +94,7 @@ export const loadConversations = async (): Promise<InboxResult> => {
       conversation.lastAt = at;
       conversation.lastText = previewOf(wire);
       conversation.lastFrom = isFromTeam(wire) ? 'team' : 'user';
-      conversation.hasImage = Boolean(wire.file_id);
+      conversation.lastMedia = mediaKindOf(wire);
     }
     byChat.set(chatId, conversation);
   });

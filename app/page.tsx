@@ -7,6 +7,7 @@ import InboxView from '@/components/InboxView';
 import ThreadView from '@/components/ThreadView';
 import BroadcastView from '@/components/BroadcastView';
 import LiveView from '@/components/LiveView';
+import UsersView from '@/components/UsersView';
 import PulseView from '@/components/PulseView';
 import {RefreshIcon, SearchIcon} from '@/components/icons';
 import {HEARTBEAT_MS} from '@/lib/contract';
@@ -234,6 +235,12 @@ const App = () => {
                 error={presenceError}
                 onOpenChat={openChat}
               />
+            </div>
+          ) : null}
+
+          {view === 'users' ? (
+            <div className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
+              <UsersView onOpenChat={openChat} refreshSignal={refreshSignal} />
             </div>
           ) : null}
 

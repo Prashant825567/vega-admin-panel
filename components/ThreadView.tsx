@@ -1,12 +1,13 @@
 'use client';
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {THREAD_POLL_MS, MAX_MESSAGE_LENGTH} from '@/lib/contract';
+import {THREAD_POLL_MS, MAX_MESSAGE_LENGTH, isMediaPlaceholder} from '@/lib/contract';
 import type {ThreadMessage} from '@/lib/api';
 import {deleteMessage, getThread, markRead, sendMessage} from '@/lib/api';
 import {clockTime, groupByDay, initialsOf, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
-import Composer from './Composer';
+import Composer, {type SentAttachment} from './Composer';
+import MediaPlayer from './MediaPlayer';
 import {BackIcon, CloseIcon, RefreshIcon, TicksIcon, TrashIcon} from './icons';
 
 /**
@@ -22,8 +23,10 @@ import {BackIcon, CloseIcon, RefreshIcon, TicksIcon, TrashIcon} from './icons';
  * - **Live.** The thread re-reads itself every 10 seconds, so an answer appears
  *   without a refresh, and the ticks turn blue on their own.
  *
- * Screenshots come through /api/file, because the store serves files to nobody
- * without the key.
+ * Attachments come through /api/file, because the store serves files to nobody
+ * without the key: a screenshot opens large, a voice note plays in its bubble and
+ * a video plays there or opens up. `message.media` is what decides which — the
+ * same message can be any of the three, and the wire only says which one.
  */
 
 type ThreadViewProps = {
@@ -54,7 +57,7 @@ const Bubble = ({
             ? 'border-violet-bright/40 bg-violet/20'
             : 'border-white/10 bg-white/[0.06]'
         }`}>
-        {message.fileId ? (
+        {message.fileId && message.media === 'image' ? (
           <button
             type="button"
             onClick={() =>
@@ -71,9 +74,33 @@ const Bubble = ({
           </button>
         ) : null}
 
-        <p className="whitespace-pre-wrap break-words leading-relaxed text-ink">
-          {message.text}
-        </p>
+        {message.fileId && message.media === 'audio' ? (
+          <MediaPlayer
+            kind="audio"
+            fileId={message.fileId}
+            durationMs={message.durationMs}
+            bytes={message.bytes}
+            className="mb-1.5"
+          />
+        ) : null}
+
+        {message.fileId && message.media === 'video' ? (
+          <MediaPlayer
+            kind="video"
+            fileId={message.fileId}
+            durationMs={message.durationMs}
+            bytes={message.bytes}
+            className="mb-1.5"
+          />
+        ) : null}
+
+        {/* A recording usually has no words of its own; the player already said
+            what it is, so the label is not repeated here. */}
+        {message.text && !isMediaPlaceholder(message.text) ? (
+          <p className="whitespace-pre-wrap break-words leading-relaxed text-ink">
+            {message.text}
+          </p>
+        ) : null}
 
         <div className="mt-1.5 flex items-center justify-end gap-1.5">
           <span className="text-[10px] text-ink-subtle">
@@ -190,8 +217,16 @@ const ThreadView = ({
   const unreadHere = messages.filter(m => m.from === 'user' && !m.read).length;
 
   const send = useCallback(
-    async (text: string, fileId: string | null) => {
-      await sendMessage({chatId, text, fileId});
+    async (text: string, attachment: SentAttachment | null) => {
+      await sendMessage({
+        chatId,
+        text,
+        fileId: attachment?.fileId ?? null,
+        kind: attachment?.kind ?? null,
+        mime: attachment?.mime ?? null,
+        durationMs: attachment?.durationMs ?? null,
+        bytes: attachment?.bytes ?? null,
+      });
       await load();
       requestAnimationFrame(() => {
         bottomRef.current?.scrollIntoView({behavior: 'smooth', block: 'end'});

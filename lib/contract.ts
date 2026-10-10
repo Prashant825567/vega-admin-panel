@@ -47,6 +47,53 @@ export type ZtDocument<T> = {
 /** `[field, operator, value]` — repeats are ANDed by the store. */
 export type ZtWhere = [field: string, operator: string, value: string];
 
+/**
+ * What kind of file rides with a message.
+ *
+ * `image` is what the app has always sent. `audio` and `video` are recordings —
+ * the panel can make both, and the app can make the audio one.
+ */
+export type MediaKind = 'image' | 'audio' | 'video';
+
+/**
+ * How big a file may be, per kind.
+ *
+ * A screenshot is one frame; a voice note is minutes of talk; a screen recording
+ * is both at once. The caps differ because the costs do. These are the panel's
+ * own ceilings — the store is asked to hold the bytes, and an upload over its own
+ * limit fails with the store's message, which is surfaced as-is.
+ */
+export const MEDIA_LIMITS: Record<MediaKind, number> = {
+  image: 10 * 1024 * 1024,
+  audio: 25 * 1024 * 1024,
+  video: 50 * 1024 * 1024,
+};
+
+/**
+ * How long a voice note may run. A cap in *time* is the honest one for a
+ * recorder: it stops while the person can still see the timer, instead of
+ * failing at the end with "too big". Video is uploaded rather than recorded, so
+ * it has no clock — only the byte cap in MEDIA_LIMITS.
+ */
+export const RECORD_LIMIT_MS = 5 * 60_000;
+
+/** What a message with no words says in its place. */
+export const MEDIA_LABEL: Record<MediaKind, string> = {
+  image: '📷 Screenshot',
+  audio: '🎤 Voice note',
+  video: '🎥 Video',
+};
+
+/**
+ * True when a message's whole text is only the label written in place of a
+ * missing caption. A player says "🎤 Voice note" on its own line, so a bubble
+ * must not print it twice.
+ */
+export const isMediaPlaceholder = (text: string): boolean => {
+  const words = (text || '').trim();
+  return !!words && Object.values(MEDIA_LABEL).includes(words);
+};
+
 /** One message, exactly as the app writes it. */
 export type WireMessage = {
   chat_id?: string;
@@ -57,6 +104,53 @@ export type WireMessage = {
   read?: boolean;
   image?: string | null;
   file_id?: string | null;
+  /** What the attached file is. Absent on everything written before media. */
+  media_kind?: MediaKind | null;
+  /** The file's own type, so a player picks a source without a HEAD request. */
+  mime?: string | null;
+  /** How long a recording runs, in milliseconds. */
+  media_ms?: number | null;
+  /** What the file weighed, for the size line under a player. */
+  media_bytes?: number | null;
+};
+
+/** The media kind a mime type belongs to, or null when nothing matches. */
+export const kindFromMime = (mime: string): MediaKind | null => {
+  const type = (mime || '').trim().toLowerCase();
+  if (type.startsWith('image/')) {
+    return 'image';
+  }
+  if (type.startsWith('audio/')) {
+    return 'audio';
+  }
+  if (type.startsWith('video/')) {
+    return 'video';
+  }
+  return null;
+};
+
+/**
+ * What kind of file a message carries, if any.
+ *
+ * Three sources, in order of trust: what the sender declared, what the mime says,
+ * and — for everything the app wrote before media existed — the fact that an
+ * `image` url is there at all. A message with no `file_id` carries nothing.
+ */
+export const mediaKindOf = (message: WireMessage): MediaKind | null => {
+  if (!message.file_id && !message.image) {
+    return null;
+  }
+  const declared = (message.media_kind || '').toLowerCase();
+  if (declared === 'image' || declared === 'audio' || declared === 'video') {
+    return declared;
+  }
+  return kindFromMime(message.mime || '') || 'image';
+};
+
+/** What a message with no words shows in a list, whatever it carries. */
+export const mediaLabelOf = (message: WireMessage): string => {
+  const kind = mediaKindOf(message);
+  return kind ? MEDIA_LABEL[kind] : '';
 };
 
 /** One presence heartbeat. */
@@ -100,7 +194,8 @@ export type Conversation = {
   lastText: string;
   lastAt: number;
   lastFrom: 'user' | 'team';
-  hasImage: boolean;
+  /** The file riding on the last message, so the row can show a mic or a film. */
+  lastMedia: MediaKind | null;
   unread: number;
   total: number;
 };
@@ -115,8 +210,16 @@ export type ThreadMessage = {
   /** Who wrote it, from the app's point of view. */
   from: 'user' | 'team';
   text: string;
-  /** ZentraGrid file id, when a screenshot is attached. */
+  /** ZentraGrid file id, when a file is attached. */
   fileId: string | null;
+  /** What that file is — a picture, a voice note or a recording. */
+  media: MediaKind | null;
+  /** The file's own type, for the player. */
+  mime: string | null;
+  /** How long a recording runs, when the sender declared it. */
+  durationMs: number | null;
+  /** How much the file weighs. */
+  bytes: number | null;
   /** Millisecond epoch. */
   at: number;
   /** The other side has seen it. */
@@ -130,6 +233,22 @@ export type PresenceEntry = {
   role: 'user' | 'panel';
   lastSeen: number;
   device?: string;
+};
+
+/**
+ * One account from the roster: what the phone's own heartbeat documents add up
+ * to — who has run the app, and when they were last there.
+ */
+export type KnownUser = {
+  /** Presence document id. */
+  id: string;
+  email: string;
+  lastSeen: number;
+  device?: string;
+  /** Their heartbeat is inside the window, so the app is open right now. */
+  online: boolean;
+  /** The thread the panel would open for them. */
+  chatId: string;
 };
 
 /** What the Pulse dashboard shows. */

@@ -104,6 +104,12 @@ type CallOptions = {
   /** JSON calls must say so; multipart must NOT, the boundary comes from FormData. */
   json?: boolean;
   timeoutMs?: number;
+  /**
+   * Extra request headers, on top of the Authorization one. Only the media
+   * download uses this today, to forward a `Range` so a video can be seeked
+   * instead of pulled whole.
+   */
+  headers?: Record<string, string>;
 };
 
 const call = async (path: string, options: CallOptions = {}): Promise<Response> => {
@@ -115,6 +121,7 @@ const call = async (path: string, options: CallOptions = {}): Promise<Response> 
   try {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${apiKey()}`,
+      ...options.headers,
     };
     if (options.json) {
       headers['Content-Type'] = 'application/json';
@@ -272,12 +279,31 @@ export const uploadFile = async (
 };
 
 /**
+ * Removes one stored file.
+ *
+ * Only one caller needs this: the composer, when a file uploads and the message
+ * that was going to point at it never lands. Leaving it would put bytes in the
+ * store that nothing references and no screen can ever show again.
+ */
+export const deleteFile = async (fileId: string): Promise<void> => {
+  await call(`/v1/files/${encodeURIComponent(fileId)}`, {method: 'DELETE'});
+};
+
+/**
  * Streams a stored file back. ZentraGrid serves nothing without the key, so an
  * `<img src>` can never point at it directly — this is what /api/file proxies.
+ *
+ * `range` is forwarded verbatim when the browser asks for one. That matters for
+ * media and not for pictures: without it Safari refuses to play a video at all,
+ * and Chrome can only ever play it from the start.
  */
-export const downloadFile = async (fileId: string): Promise<Response> =>
+export const downloadFile = async (
+  fileId: string,
+  range?: string | null,
+): Promise<Response> =>
   call(`/v1/files/${encodeURIComponent(fileId)}/download`, {
     timeoutMs: TRANSFER_TIMEOUT_MS,
+    headers: range ? {Range: range} : undefined,
   });
 
 /** Turns any thrown value into the JSON response an API route should send. */

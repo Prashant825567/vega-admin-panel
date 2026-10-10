@@ -7,12 +7,15 @@
  * silently drifting from the phone app.
  */
 
-import type {
-  Conversation,
-  PresenceEntry,
-  Pulse,
-  ThreadMessage,
-  WireMessage,
+import {
+  mediaLabelOf,
+  type Conversation,
+  type KnownUser,
+  type MediaKind,
+  type PresenceEntry,
+  type Pulse,
+  type ThreadMessage,
+  type WireMessage,
 } from './contract';
 
 // Re-exported so screens can import both the call and its result type together.
@@ -85,19 +88,37 @@ export const sendMessage = (body: {
   email?: string;
   text: string;
   fileId?: string | null;
+  /** The upload's own description of the file it stored. */
+  kind?: MediaKind | null;
+  mime?: string | null;
+  durationMs?: number | null;
+  bytes?: number | null;
 }) =>
-  request<{id: string; sent_at: string; chatId: string; announcement: boolean}>(
-    '/api/messages',
-    {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    },
-  );
+  request<{
+    id: string;
+    sent_at: string;
+    chatId: string;
+    announcement: boolean;
+    kind: MediaKind | null;
+  }>('/api/messages', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
 
 export const deleteMessage = (id: string) =>
   request<{id: string; deleted: boolean}>(
     `/api/messages?id=${encodeURIComponent(id)}`,
+    {method: 'DELETE'},
+  );
+
+/**
+ * Removes a file that was uploaded but never claimed by a message. Called when a
+ * send fails after its upload, so the store does not keep orphans.
+ */
+export const deleteUploadedFile = (id: string) =>
+  request<{id: string; deleted: boolean}>(
+    `/api/upload?id=${encodeURIComponent(id)}`,
     {method: 'DELETE'},
   );
 
@@ -112,14 +133,25 @@ export const markRead = (chatId: string, ids: string[]) =>
     body: JSON.stringify({chatId, ids}),
   });
 
-export const uploadScreenshot = (file: File) => {
+/**
+ * Puts one file in the store and hands back everything a message needs to
+ * describe it. `durationMs` is what a recorder knows and the file itself does
+ * not: a player can then draw "0:14" before it has downloaded a single byte.
+ */
+export const uploadMedia = (file: File, durationMs?: number) => {
   const form = new FormData();
-  form.append('file', file);
+  form.append('file', file, file.name);
+  if (typeof durationMs === 'number' && durationMs > 0) {
+    form.append('durationMs', String(Math.round(durationMs)));
+  }
   return request<{
     id: string;
     name: string;
     size: number;
     mimeType: string;
+    kind: MediaKind;
+    durationMs: number | null;
+    label: string;
     url: string;
   }>('/api/upload', {method: 'POST', body: form});
 };
@@ -145,6 +177,13 @@ export const announcePanel = () =>
 export const getPulse = () =>
   request<Pulse & {capped: boolean}>('/api/pulse');
 
-/** The last message of a thread, for the inbox row. */
+/** The roster: every account the app has checked in for, freshest first. */
+export const getUsers = () =>
+  request<{users: KnownUser[]; total: number; truncated: boolean}>('/api/users');
+
+/**
+ * The last message of a thread, for the inbox row. A recording that travelled
+ * without words still has to look like something.
+ */
 export const messagePreview = (message: WireMessage): string =>
-  (message.text || '').trim() || (message.file_id ? '📷 Screenshot' : '');
+  (message.text || '').trim() || mediaLabelOf(message);

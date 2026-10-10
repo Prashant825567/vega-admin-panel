@@ -1,12 +1,18 @@
 'use client';
 
 import {useCallback, useEffect, useState} from 'react';
-import {BROADCAST_CHAT, BROADCAST_LIMIT, MAX_MESSAGE_LENGTH} from '@/lib/contract';
+import {
+  BROADCAST_CHAT,
+  BROADCAST_LIMIT,
+  MAX_MESSAGE_LENGTH,
+  isMediaPlaceholder,
+} from '@/lib/contract';
 import type {ThreadMessage} from '@/lib/api';
 import {deleteMessage, getThread, sendMessage} from '@/lib/api';
 import {clockTime, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
-import Composer from './Composer';
+import Composer, {type SentAttachment} from './Composer';
+import MediaPlayer from './MediaPlayer';
 import {MegaphoneIcon, TrashIcon} from './icons';
 
 /**
@@ -20,6 +26,10 @@ import {MegaphoneIcon, TrashIcon} from './icons';
  * - it is one document with no per-user receipt, so nothing here is ever marked
  *   read — the app only marks messages inside a user's own thread;
  * - deleting removes it for everybody, which is why it asks first.
+ *
+ * An announcement can carry the same attachments a reply can — a screenshot, a
+ * voice note or a screen recording — because "the app will be down for ten
+ * minutes" is often best said out loud.
  */
 
 type BroadcastViewProps = {
@@ -60,8 +70,16 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
   }, [refresh, refreshSignal]);
 
   const post = useCallback(
-    async (text: string, fileId: string | null) => {
-      await sendMessage({chatId: BROADCAST_CHAT, text, fileId});
+    async (text: string, attachment: SentAttachment | null) => {
+      await sendMessage({
+        chatId: BROADCAST_CHAT,
+        text,
+        fileId: attachment?.fileId ?? null,
+        kind: attachment?.kind ?? null,
+        mime: attachment?.mime ?? null,
+        durationMs: attachment?.durationMs ?? null,
+        bytes: attachment?.bytes ?? null,
+      });
       await load();
       notify('Announcement posted — everyone sees it', 'ok');
     },
@@ -142,7 +160,7 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
           <div
             key={item.id}
             className="animate-rise glass sheen relative overflow-hidden p-3.5">
-            {item.fileId ? (
+            {item.fileId && item.media === 'image' ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={`/api/file?id=${encodeURIComponent(item.fileId)}`}
@@ -151,9 +169,22 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
                 loading="lazy"
               />
             ) : null}
-            <p className="whitespace-pre-wrap break-words text-sm text-ink">
-              {item.text}
-            </p>
+
+            {item.fileId && (item.media === 'audio' || item.media === 'video') ? (
+              <MediaPlayer
+                kind={item.media}
+                fileId={item.fileId}
+                durationMs={item.durationMs}
+                bytes={item.bytes}
+                className="mb-2"
+              />
+            ) : null}
+
+            {item.text && !isMediaPlaceholder(item.text) ? (
+              <p className="whitespace-pre-wrap break-words text-sm text-ink">
+                {item.text}
+              </p>
+            ) : null}
             <div className="mt-2 flex items-center justify-between">
               <span className="text-[11px] text-ink-subtle">
                 {relativeTime(item.at)} · {clockTime(item.at)}

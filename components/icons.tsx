@@ -58,6 +58,15 @@ export const LiveIcon = (props: IconProps) => (
   </Svg>
 );
 
+/** The roster: two heads, the one on the right drawn smaller. */
+export const PeopleIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <circle cx="9" cy="8" r="3.2" />
+    <path d="M3.5 19.5a5.5 5.5 0 0 1 11 0" />
+    <path d="M16 6.2a3 3 0 0 1 0 5.6M17.5 19.5a5.4 5.4 0 0 0-1.6-3.8" />
+  </Svg>
+);
+
 export const SearchIcon = (props: IconProps) => (
   <Svg {...props}>
     <circle cx="11" cy="11" r="6" />
@@ -84,6 +93,45 @@ export const ImageIcon = (props: IconProps) => (
     <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
     <circle cx="9" cy="10" r="1.4" />
     <path d="m5 17 4.5-4.5L13 16l2.5-2.5L20 18" />
+  </Svg>
+);
+
+export const MicIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" />
+  </Svg>
+);
+
+export const VideoIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <rect x="3" y="6.5" width="12.5" height="11" rx="2.5" />
+    <path d="m15.5 12 5.5-3v10l-5.5-3z" />
+  </Svg>
+);
+
+/** Ends a recording — the square every recorder uses for "stop". */
+export const StopIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <rect x="7" y="7" width="10" height="10" rx="2.5" fill="currentColor" />
+  </Svg>
+);
+
+export const PlayIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M8 5.5 19 12 8 18.5z" fill="currentColor" />
+  </Svg>
+);
+
+export const PauseIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M9 5.5v13M15 5.5v13" />
+  </Svg>
+);
+
+export const ExpandIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5" />
   </Svg>
 );
 

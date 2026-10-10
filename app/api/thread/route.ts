@@ -12,10 +12,12 @@ import {
   MESSAGES,
   MAX_MESSAGE_LENGTH,
   SCAN_LIMIT,
+  MEDIA_LABEL,
   ThreadMessage,
   WireMessage,
   atOf,
   emailOf,
+  mediaKindOf,
 } from '@/lib/contract';
 import {queryAll, toErrorResponse} from '@/lib/zentra';
 
@@ -44,14 +46,23 @@ export const GET = async (request: NextRequest) => {
         const at = atOf(wire) || Date.parse(doc.created_at || '') || 0;
         const text = (wire.text || '').trim();
         const fileId = wire.file_id || null;
+        const media = mediaKindOf(wire);
+        const durationMs = Number(wire.media_ms);
+        const bytes = Number(wire.media_bytes);
         return {
           id: doc.id,
           from:
             (wire.from || '').trim().toLowerCase() === 'admin'
               ? ('team' as const)
               : ('user' as const),
-          text: text || (fileId ? 'Screenshot attached' : ''),
+          // A recording often has no words, so the bubble needs something to
+          // say even before the player draws itself.
+          text: text || (media ? MEDIA_LABEL[media] : ''),
           fileId,
+          media,
+          mime: wire.mime || null,
+          durationMs: Number.isFinite(durationMs) && durationMs > 0 ? durationMs : null,
+          bytes: Number.isFinite(bytes) && bytes > 0 ? bytes : null,
           at,
           read: wire.read === true,
         };
