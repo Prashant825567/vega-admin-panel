@@ -5,6 +5,12 @@
  * app paints: on a message the user wrote, `read: true` means the team has
  * opened it (the app shows blue double ticks), and on an admin reply it means
  * the user has. The thread screen reads both.
+ *
+ * Messages the team has hidden from its own side are left out here and nowhere
+ * else: the documents are untouched, so the person who wrote them still has them
+ * and every other screen that reads them — the phone's own chat included — still
+ * sees them. That is what makes "delete for me" different from "delete for
+ * everyone", and it is the only difference.
  */
 
 import type {NextRequest} from 'next/server';
@@ -16,8 +22,10 @@ import {
   WireMessage,
   atOf,
   emailOf,
+  isHiddenForTeam,
   mediaKindOf,
 } from '@/lib/contract';
+import {nameOf} from '@/lib/server/names';
 import {queryAll, toErrorResponse} from '@/lib/zentra';
 
 export const dynamic = 'force-dynamic';
@@ -40,6 +48,7 @@ export const GET = async (request: NextRequest) => {
     );
 
     const messages: ThreadMessage[] = documents
+      .filter(doc => !isHiddenForTeam(doc.data || {}))
       .map(doc => {
         const wire = doc.data || {};
         const at = atOf(wire) || Date.parse(doc.created_at || '') || 0;
@@ -69,9 +78,16 @@ export const GET = async (request: NextRequest) => {
       // A document with neither words nor a screenshot has nothing to show.
       .filter(message => message.text || message.fileId);
 
+    const email = emailOf(chatId);
+    // The header shows the name they signed in with; a Firestore hiccup must not
+    // take the thread down with it, so a failure here just means the screen
+    // falls back to the address.
+    const name = await nameOf(email).catch(() => null);
+
     return Response.json({
       chatId,
-      email: emailOf(chatId),
+      email,
+      name,
       messages,
       truncated,
     });

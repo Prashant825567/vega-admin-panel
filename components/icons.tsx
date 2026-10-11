@@ -152,6 +152,15 @@ export const ExpandIcon = (props: IconProps) => (
   </Svg>
 );
 
+/** "Hidden from your side only" — the gentler half of a delete. */
+export const EyeOffIcon = (props: IconProps) => (
+  <Svg {...props}>
+    <path d="M4 12s3-5.5 8-5.5S20 12 20 12s-3 5.5-8 5.5S4 12 4 12z" />
+    <circle cx="12" cy="12" r="2.2" />
+    <path d="m5 19 14-14" />
+  </Svg>
+);
+
 export const TrashIcon = (props: IconProps) => (
   <Svg {...props}>
     <path d="M4 7h16M9.5 7V5.5h5V7M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7" />

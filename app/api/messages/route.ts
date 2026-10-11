@@ -1,6 +1,7 @@
 /**
  * POST   /api/messages — send a reply, or post an announcement.
- * DELETE /api/messages?id=... — delete one message.
+ * PATCH  /api/messages?id=... — hide messages from the team's own side.
+ * DELETE /api/messages?id=... — delete one message, for everybody.
  *
  * The document written here is exactly the shape the phone app reads
  * (lib/contract.ts): `from: "admin"`, `read: false`, a real ISO `sent_at`, and
@@ -24,6 +25,7 @@ import {
   deleteDocument,
   fileUrl,
   toErrorResponse,
+  updateDocument,
   ZtError,
 } from '@/lib/zentra';
 
@@ -103,6 +105,60 @@ export const POST = async (request: NextRequest) => {
       {id: stored.id, sent_at: data.sent_at, chatId, announcement, kind},
       {status: 201},
     );
+  } catch (error) {
+    return toErrorResponse(error);
+  }
+};
+
+/**
+ * The other half of a delete: **hide**, rather than remove.
+ *
+ * This is what the panel's "delete for me" writes, and the name is deliberately
+ * about who it hides from. The document stays exactly as it is, so the person
+ * who wrote it still has it, the phone still draws it, and the only screen that
+ * stops showing it is ours. `hidden_for_team: false` puts it back, which is what
+ * makes the choice reversible — a real delete never is.
+ *
+ * It sets the flag on every id it is given, so a future multi-select needs no
+ * change here, and it reports how many took: one refusal must not look like a
+ * success, and it must not stop the rest of the batch either.
+ */
+type HideBody = {
+  id?: string;
+  ids?: string[];
+  /** False puts hidden messages back in the team's view. Defaults to hiding. */
+  hiddenForTeam?: boolean;
+};
+
+export const PATCH = async (request: NextRequest) => {
+  try {
+    const body = (await request.json().catch(() => ({}))) as HideBody;
+    const wanted = [
+      body.id || '',
+      ...(Array.isArray(body.ids) ? body.ids : []),
+      request.nextUrl.searchParams.get('id') || '',
+    ]
+      .map(value => (value || '').trim())
+      .filter(Boolean);
+    const ids = [...new Set(wanted)];
+    if (!ids.length) {
+      return Response.json({error: 'An id is required'}, {status: 400});
+    }
+
+    const hiddenForTeam = body.hiddenForTeam !== false;
+    let hidden = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await updateDocument<{hidden_for_team: boolean}>(MESSAGES, id, {
+          hidden_for_team: hiddenForTeam,
+        });
+        hidden += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return Response.json({hidden, failed, hiddenForTeam});
   } catch (error) {
     return toErrorResponse(error);
   }

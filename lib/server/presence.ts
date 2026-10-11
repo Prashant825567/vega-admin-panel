@@ -70,7 +70,69 @@ const toEntry = (doc: {id: string; data?: WirePresence}): PresenceEntry | null =
     role: doc.data?.role === 'panel' ? 'panel' : 'user',
     lastSeen,
     device: doc.data?.device || undefined,
+    name: (doc.data?.name || '').trim() || null,
   };
+};
+
+/**
+ * One row per account, keeping the freshest heartbeat.
+ *
+ * The store has no upsert and both clients are apps on an unreliable network, so
+ * a second heartbeat document for the same account is not a bug anybody can
+ * prevent — and an account showing up twice in a roster is not something anybody
+ * should have to read. Whichever document is newest wins, and it brings its
+ * device and name with it; the rest are dropped. Ties keep the first seen, so
+ * the order the store returned decides rather than nothing at all.
+ */
+const freshestPerUser = (entries: PresenceEntry[]): PresenceEntry[] => {
+  const byUser = new Map<string, PresenceEntry>();
+  entries.forEach(entry => {
+    const key = `${entry.role}:${entry.user}`;
+    const known = byUser.get(key);
+    if (!known) {
+      byUser.set(key, entry);
+      return;
+    }
+    // A name is worth keeping even when the newer document forgot to send one.
+    byUser.set(key, {
+      ...(entry.lastSeen > known.lastSeen ? entry : known),
+      name:
+        (entry.lastSeen > known.lastSeen ? entry.name : known.name) ??
+        known.name ??
+        entry.name,
+      device:
+        (entry.lastSeen > known.lastSeen ? entry.device : known.device) ??
+        known.device ??
+        entry.device,
+    });
+  });
+  return [...byUser.values()];
+};
+
+/**
+ * What the app calls each account, for the screens that show a name.
+ *
+ * Read from the same `presence` collection, and it is the only place a name
+ * exists: the panel has no credentials for the phone's own user records. An
+ * account with no name is left out rather than mapped to an empty string, so the
+ * caller's own fallback decides what to draw.
+ */
+export const namesByEmail = async (): Promise<Map<string, string>> => {
+  const {documents} = await queryAll<WirePresence>(
+    PRESENCE,
+    {orderBy: 'last_seen:desc', limit: 200},
+    SCAN_LIMIT,
+  );
+  const names = new Map<string, string>();
+  documents
+    .map(toEntry)
+    .filter((entry): entry is PresenceEntry => entry !== null)
+    .forEach(entry => {
+      if (entry.role === 'user' && entry.name && !names.has(entry.user)) {
+        names.set(entry.user, entry.name);
+      }
+    });
+  return names;
 };
 
 /** Everyone seen inside the window, freshest first. */
@@ -87,9 +149,11 @@ export const listOnline = async (
     orderBy: 'last_seen',
     limit: 200,
   });
-  return documents
-    .map(toEntry)
-    .filter((entry): entry is PresenceEntry => entry !== null);
+  return freshestPerUser(
+    documents
+      .map(toEntry)
+      .filter((entry): entry is PresenceEntry => entry !== null),
+  ).sort((a, b) => b.lastSeen - a.lastSeen);
 };
 
 /**
@@ -105,6 +169,11 @@ export const listOnline = async (
  * the app has no document, and the panel only reads ZentraGrid — the phone's
  * own users collection is a different store it has no credentials for. The
  * screen says so rather than implying it has everybody.
+ *
+ * A document is not one per account, either, so the rows are folded together by
+ * email and the newest heartbeat wins. Two copies of the same person is the one
+ * thing a roster cannot survive: every count on the screen, every "open chat"
+ * button and every misread of "which one is really them" comes from it.
  */
 export const listKnownUsers = async (): Promise<{
   users: KnownUser[];
@@ -116,17 +185,23 @@ export const listKnownUsers = async (): Promise<{
     SCAN_LIMIT,
   );
   const now = Date.now();
-  const users = documents
-    .map(toEntry)
-    .filter((entry): entry is PresenceEntry => entry !== null && entry.role === 'user')
+  const users = freshestPerUser(
+    documents
+      .map(toEntry)
+      .filter(
+        (entry): entry is PresenceEntry => entry !== null && entry.role === 'user',
+      ),
+  )
     .map(
       (entry): KnownUser => ({
         id: entry.id,
         email: entry.user,
+        name: entry.name,
         lastSeen: entry.lastSeen,
         device: entry.device,
         online: now - entry.lastSeen < ONLINE_WINDOW_MS,
         chatId: chatIdFor(entry.user),
+        messages: 0,
       }),
     )
     .sort((a, b) => b.lastSeen - a.lastSeen);

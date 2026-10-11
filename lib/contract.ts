@@ -117,6 +117,16 @@ export type WireMessage = {
   media_ms?: number | null;
   /** What the file weighed, for the size line under a player. */
   media_bytes?: number | null;
+  /**
+   * Set when the team has hidden a message from its own side only.
+   *
+   * The document itself stays, so the person who wrote it still has it — which
+   * is the whole difference between "delete for me" and "delete for everyone".
+   * A hidden message is left out of the thread, out of the inbox, and out of the
+   * unread count, exactly as if it had been deleted, without anybody else losing
+   * anything.
+   */
+  hidden_for_team?: boolean | null;
 };
 
 /** The media kind a mime type belongs to, or null when nothing matches. */
@@ -164,6 +174,14 @@ export type WirePresence = {
   role?: string;
   last_seen?: string;
   device?: string;
+  /**
+   * What the person is called, as the app has it.
+   *
+   * Written by the phone on every heartbeat. It is absent on everything that
+   * checked in before the field existed, which is why every screen falls back to
+   * the email's own first half rather than showing a blank row.
+   */
+  name?: string | null;
 };
 
 /** The thread this account talks to the team in. Lowercase, always. */
@@ -182,9 +200,23 @@ export const isBroadcast = (chatId: string): boolean =>
 export const isFromTeam = (message: WireMessage): boolean =>
   (message.from || '').trim().toLowerCase() === ADMIN;
 
-/** Unread *for the team*: the user wrote it and nobody has opened it. */
+/**
+ * Hidden from the team's own view only — the author still has it.
+ *
+ * This is what "delete for me" writes on the panel's side, and everything that
+ * lists messages has to honour it: a hidden message is not in the thread, not in
+ * the inbox, and not part of the unread count. It is the same set of screens
+ * that would have shown a deleted one, which is the point.
+ */
+export const isHiddenForTeam = (message: WireMessage): boolean =>
+  message.hidden_for_team === true;
+
+/**
+ * Unread *for the team*: the user wrote it, nobody has opened it, and it has not
+ * been hidden from the team's view.
+ */
 export const isUnreadForTeam = (message: WireMessage): boolean =>
-  !isFromTeam(message) && message.read !== true;
+  !isFromTeam(message) && message.read !== true && !isHiddenForTeam(message);
 
 /** When a message happened, in milliseconds — never NaN. */
 export const atOf = (message: WireMessage): number => {
@@ -203,6 +235,8 @@ export type Conversation = {
   lastMedia: MediaKind | null;
   unread: number;
   total: number;
+  /** What the app calls this person, when it has told us. */
+  name: string | null;
 };
 
 /**
@@ -238,6 +272,8 @@ export type PresenceEntry = {
   role: 'user' | 'panel';
   lastSeen: number;
   device?: string;
+  /** As above: the app's own name for them, when it has one. */
+  name: string | null;
 };
 
 /**
@@ -248,12 +284,20 @@ export type KnownUser = {
   /** Presence document id. */
   id: string;
   email: string;
+  /** The app's own name for them, when it has one. */
+  name: string | null;
   lastSeen: number;
   device?: string;
   /** Their heartbeat is inside the window, so the app is open right now. */
   online: boolean;
   /** The thread the panel would open for them. */
   chatId: string;
+  /**
+   * How many messages this account and the team have exchanged, or 0 when they
+   * have written nothing yet. The account still belongs on the roster: signing
+   * in is what puts somebody here, not starting a conversation.
+   */
+  messages: number;
 };
 
 /** What the Pulse dashboard shows. */

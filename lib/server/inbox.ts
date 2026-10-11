@@ -21,6 +21,7 @@ import {
   emailOf,
   isBroadcast,
   isFromTeam,
+  isHiddenForTeam,
   isUnreadForTeam,
   mediaKindOf,
   mediaLabelOf,
@@ -69,6 +70,12 @@ export const loadConversations = async (): Promise<InboxResult> => {
     if (!chatId || isBroadcast(chatId)) {
       return;
     }
+    // Hidden from the team's own side: it is not in the thread, so it cannot be
+    // the row's preview, its count or its unread badge either. The document is
+    // still there for the person who wrote it.
+    if (isHiddenForTeam(wire)) {
+      return;
+    }
     // A message with no `sent_at` still has to sort somewhere sensible.
     const at = atOf(wire) || Date.parse(doc.created_at || '') || 0;
     const conversation =
@@ -82,6 +89,9 @@ export const loadConversations = async (): Promise<InboxResult> => {
         lastMedia: null,
         unread: 0,
         total: 0,
+        // Filled in by the route from the presence roster: a name lives there,
+        // not on a message.
+        name: null,
       } satisfies Conversation);
 
     conversation.total += 1;

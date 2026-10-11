@@ -8,10 +8,11 @@ import {
 } from '@/lib/contract';
 import type {SentAttachment} from '@/lib/contract';
 import type {ThreadMessage} from '@/lib/api';
-import {deleteMessage, getThread, sendBatch} from '@/lib/api';
+import {deleteMessage, getThread, hideMessage, sendBatch} from '@/lib/api';
 import {clockTime, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
 import Composer from './Composer';
+import DeleteMenu from './DeleteMenu';
 import MediaPlayer from './MediaPlayer';
 import {MegaphoneIcon, TrashIcon} from './icons';
 
@@ -31,6 +32,11 @@ import {MegaphoneIcon, TrashIcon} from './icons';
  * them, mixed — because "the app will be down for ten minutes" is often best said
  * out loud, and one announcement with the four screenshots that show it is kinder
  * than five announcements in a row.
+ *
+ * Deleting one asks the same two-way question a reply does, and the difference
+ * matters more here, not less: this is one document rather than a message in
+ * somebody's thread, so "for everyone" takes it away from every user who has not
+ * opened the app yet, while "for me" only stops the team from having to read it.
  */
 
 type BroadcastViewProps = {
@@ -44,6 +50,8 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
   const [items, setItems] = useState<ThreadMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** The announcement whose delete is being decided, if any. */
+  const [deleting, setDeleting] = useState<ThreadMessage | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -85,25 +93,39 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
     [load, notify],
   );
 
-  const remove = useCallback(
-    async (item: ThreadMessage) => {
-      if (
-        !window.confirm(
-          'Delete this announcement for everyone who has not opened the app yet?',
-        )
-      ) {
+  const deleteForMe = useCallback(async () => {
+    const item = deleting;
+    setDeleting(null);
+    if (!item) {
+      return;
+    }
+    try {
+      const result = await hideMessage(item.id, true);
+      if (!result.hidden) {
+        notify('The store would not hide that one', 'danger');
         return;
       }
-      try {
-        await deleteMessage(item.id);
-        setItems(current => current.filter(row => row.id !== item.id));
-        notify('Announcement deleted', 'ok');
-      } catch (failure) {
-        notify((failure as Error).message || 'Could not delete that', 'danger');
-      }
-    },
-    [notify],
-  );
+      setItems(current => current.filter(row => row.id !== item.id));
+      notify('Hidden from the team — every user still sees it', 'ok');
+    } catch (failure) {
+      notify((failure as Error).message || 'Could not hide that', 'danger');
+    }
+  }, [deleting, notify]);
+
+  const deleteForEveryone = useCallback(async () => {
+    const item = deleting;
+    setDeleting(null);
+    if (!item) {
+      return;
+    }
+    try {
+      await deleteMessage(item.id);
+      setItems(current => current.filter(row => row.id !== item.id));
+      notify('Announcement deleted for everyone', 'ok');
+    } catch (failure) {
+      notify((failure as Error).message || 'Could not delete that', 'danger');
+    }
+  }, [deleting, notify]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
@@ -190,7 +212,7 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
               </span>
               <button
                 type="button"
-                onClick={() => void remove(item)}
+                onClick={() => setDeleting(item)}
                 aria-label="Delete announcement"
                 className="focus-ring rounded-lg p-1.5 text-ink-subtle transition hover:bg-white/10 hover:text-danger">
                 <TrashIcon size={14} />
@@ -206,6 +228,16 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
         onError={message => notify(message, 'danger')}
         sendLabel="Announce"
       />
+
+      {deleting ? (
+        <DeleteMenu
+          label="this announcement"
+          broadcast
+          onCancel={() => setDeleting(null)}
+          onDeleteForMe={() => void deleteForMe()}
+          onDeleteForEveryone={() => void deleteForEveryone()}
+        />
+      ) : null}
     </div>
   );
 };

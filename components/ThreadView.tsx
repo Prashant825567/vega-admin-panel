@@ -4,10 +4,17 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {THREAD_POLL_MS, isMediaPlaceholder} from '@/lib/contract';
 import type {SentAttachment} from '@/lib/contract';
 import type {ThreadMessage} from '@/lib/api';
-import {deleteMessage, getThread, markRead, sendBatch} from '@/lib/api';
-import {clockTime, groupByDay, initialsOf, relativeTime} from '@/lib/format';
+import {
+  deleteMessage,
+  getThread,
+  hideMessage,
+  markRead,
+  sendBatch,
+} from '@/lib/api';
+import {clockTime, displayNameOf, groupByDay, initialsOf, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
 import Composer from './Composer';
+import DeleteMenu from './DeleteMenu';
 import MediaPlayer from './MediaPlayer';
 import {BackIcon, CloseIcon, RefreshIcon, TicksIcon, TrashIcon} from './icons';
 
@@ -34,6 +41,16 @@ import {BackIcon, CloseIcon, RefreshIcon, TicksIcon, TrashIcon} from './icons';
  * picture, voice note or video underneath. `sendBatch` reports how many of them
  * the store really took, which is what lets the composer delete the uploads that
  * nothing points at instead of leaving them stranded in the bucket.
+ *
+ * Deleting asks the one question that matters — **for me, or for everyone** —
+ * because the two answers are different actions rather than two ways of saying
+ * the same thing. "For everyone" deletes the document and both sides lose it;
+ * "for me" hides it from the team's view and leaves the document, and the user,
+ * completely alone. See DeleteMenu and the PATCH in /api/messages.
+ *
+ * The header shows the person's name; clicking it reveals their address. That is
+ * the same trade the inbox makes: the thread is a conversation with somebody, and
+ * their email is an identifier you sometimes need and rarely want to read first.
  */
 
 type ThreadViewProps = {
@@ -121,15 +138,15 @@ const Bubble = ({
               className={message.read ? 'text-cyan' : 'text-ink-subtle'}
             />
           ) : null}
-          {!mine ? (
-            <button
-              type="button"
-              aria-label="Delete this message"
-              onClick={() => onDelete(message)}
-              className="focus-ring ml-1 rounded p-1 text-ink-subtle opacity-0 transition hover:bg-white/10 hover:text-danger group-hover:opacity-100">
-              <TrashIcon size={13} />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            aria-label={
+              mine ? 'Delete this reply' : 'Delete this message from the user'
+            }
+            onClick={() => onDelete(message)}
+            className="focus-ring ml-1 rounded p-1 text-ink-subtle opacity-0 transition hover:bg-white/10 hover:text-danger group-hover:opacity-100 focus-visible:opacity-100">
+            <TrashIcon size={13} />
+          </button>
         </div>
       </div>
     </div>
@@ -145,9 +162,14 @@ const ThreadView = ({
 }: ThreadViewProps) => {
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [email, setEmail] = useState(chatId.replace(/^chat_/, ''));
+  const [name, setName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Lightbox>(null);
+  /** The message whose delete is being decided, if any. */
+  const [deleting, setDeleting] = useState<ThreadMessage | null>(null);
+  /** The header shows a name until somebody asks who this actually is. */
+  const [showEmail, setShowEmail] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   // What this screen has already told the server is read, so a poll does not ask
   // for the same receipt over and over.
@@ -158,6 +180,7 @@ const ThreadView = ({
       const result = await getThread(chatId);
       setMessages(result.messages);
       setEmail(result.email);
+      setName(result.name ?? null);
       setError(null);
       setLoading(false);
       return result;
@@ -176,6 +199,7 @@ const ThreadView = ({
     setMessages([]);
     setLoading(true);
     setError(null);
+    setShowEmail(false);
   }, [chatId]);
 
   useEffect(() => {
@@ -242,21 +266,46 @@ const ThreadView = ({
     [chatId, load, notify],
   );
 
-  const remove = useCallback(
-    async (message: ThreadMessage) => {
-      if (!window.confirm('Delete this message for everyone?')) {
+  /**
+   * "For me": the message leaves this panel and nothing else.
+   *
+   * It is dropped from the screen immediately and re-read on the next poll, which
+   * is the honest test of it: the server is what decided, not the local list.
+   */
+  const deleteForMe = useCallback(async () => {
+    const message = deleting;
+    setDeleting(null);
+    if (!message) {
+      return;
+    }
+    try {
+      const result = await hideMessage(message.id, true);
+      if (!result.hidden) {
+        notify('The store would not hide that one', 'danger');
         return;
       }
-      try {
-        await deleteMessage(message.id);
-        setMessages(current => current.filter(row => row.id !== message.id));
-        notify('Message deleted', 'ok');
-      } catch (failure) {
-        notify((failure as Error).message || 'Could not delete that', 'danger');
-      }
-    },
-    [notify],
-  );
+      setMessages(current => current.filter(row => row.id !== message.id));
+      notify('Hidden from the team — the user still has it', 'ok');
+    } catch (failure) {
+      notify((failure as Error).message || 'Could not hide that', 'danger');
+    }
+  }, [deleting, notify]);
+
+  /** "For everyone": the document goes, and both sides lose it for good. */
+  const deleteForEveryone = useCallback(async () => {
+    const message = deleting;
+    setDeleting(null);
+    if (!message) {
+      return;
+    }
+    try {
+      await deleteMessage(message.id);
+      setMessages(current => current.filter(row => row.id !== message.id));
+      notify('Deleted for everyone', 'ok');
+    } catch (failure) {
+      notify((failure as Error).message || 'Could not delete that', 'danger');
+    }
+  }, [deleting, notify]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -270,7 +319,7 @@ const ThreadView = ({
           <BackIcon size={18} />
         </button>
         <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-xs font-black text-violet-bright">
-          {initialsOf(email)}
+          {initialsOf(email, name)}
           <span
             className={`absolute -bottom-0.5 -right-0.5 ${
               online ? 'dot-online' : 'dot-idle'
@@ -278,8 +327,18 @@ const ThreadView = ({
           />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-ink">{email}</p>
-          <p className="text-xs text-ink-muted">
+          <button
+            type="button"
+            onClick={() => setShowEmail(value => !value)}
+            aria-expanded={showEmail}
+            title={showEmail ? 'Hide the email' : 'Show the email'}
+            className="focus-ring block max-w-full truncate rounded text-left text-sm font-bold text-ink transition hover:text-violet-bright">
+            {displayNameOf(email, name)}
+          </button>
+          <p className="truncate text-xs text-ink-muted">
+            {showEmail ? (
+              <span className="text-violet-bright">{email} · </span>
+            ) : null}
             {online ? 'In the app now' : 'Last heartbeat over a minute ago'} ·{' '}
             {messages.length} messages
             {unreadHere > 0 ? ` · ${unreadHere} just marked read` : ''}
@@ -337,7 +396,7 @@ const ThreadView = ({
                   key={message.id}
                   message={message}
                   onOpenImage={(fileId, label) => setLightbox({fileId, label})}
-                  onDelete={remove}
+                  onDelete={setDeleting}
                 />
               ))}
             </div>
@@ -347,10 +406,19 @@ const ThreadView = ({
       </div>
 
       <Composer
-        placeholder={`Reply to ${email}…`}
+        placeholder={`Reply to ${displayNameOf(email, name)}…`}
         onSend={send}
         onError={message => notify(message, 'danger')}
       />
+
+      {deleting ? (
+        <DeleteMenu
+          label="this message"
+          onCancel={() => setDeleting(null)}
+          onDeleteForMe={() => void deleteForMe()}
+          onDeleteForEveryone={() => void deleteForEveryone()}
+        />
+      ) : null}
 
       {lightbox ? (
         <div

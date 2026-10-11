@@ -43,14 +43,42 @@ export const dayLabel = (at: number): string => {
   return date.toLocaleDateString([], {day: 'numeric', month: 'short', year: 'numeric'});
 };
 
-/** Letters for the little round avatar of a conversation. */
-export const initialsOf = (email: string): string => {
-  const name = (email || '').split('@')[0] || '?';
-  const parts = name.split(/[._-]+/).filter(Boolean);
+/**
+ * What a person is called on screen.
+ *
+ * **Only the name they typed into the app.** The phone writes it on every
+ * heartbeat, so it is what somebody chose to be called, and a panel that shows
+ * anything else is putting a name on screen that nobody picked.
+ *
+ * When there is no name yet — an account that has not run the updated app, or a
+ * heartbeat that arrived before the field existed — the address is shown as it
+ * is. That is deliberately *not* the email's first half dressed up into
+ * "Pr3095079": a made-up name reads like a real one, and then nobody can tell
+ * which rows are people and which are guesses. The address at least says exactly
+ * what it is, and it is the one thing we know for certain.
+ */
+export const displayNameOf = (email: string, name?: string | null): string => {
+  const given = (name || '').trim();
+  if (given) {
+    return given;
+  }
+  return (email || '').trim() || 'Unknown';
+};
+
+/**
+ * Letters for the little round avatar.
+ *
+ * A name is the natural source; with no name the address gives its first two
+ * letters, as it always did. Initials are not a claim about somebody's name the
+ * way a displayed one is — they are a shape to recognise a row by.
+ */
+export const initialsOf = (email: string, name?: string | null): string => {
+  const source = (name || '').trim() || (email || '').split('@')[0] || '?';
+  const parts = source.split(/[._\s-]+/).filter(Boolean);
   if (parts.length >= 2) {
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
-  return name.slice(0, 2).toUpperCase();
+  return source.slice(0, 2).toUpperCase();
 };
 
 /** File size in words. */

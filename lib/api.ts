@@ -76,6 +76,8 @@ export const getThread = (chatId: string) =>
   request<{
     chatId: string;
     email: string;
+    /** What the app calls them, when it has told us. */
+    name: string | null;
     messages: ThreadMessage[];
     truncated: boolean;
   }>(`/api/thread?chatId=${encodeURIComponent(chatId)}`);
@@ -183,6 +185,20 @@ export const deleteMessage = (id: string) =>
   );
 
 /**
+ * The gentler half of a delete: the message leaves the team's view and stays
+ * everywhere else. `hiddenForTeam: false` puts it back.
+ */
+export const hideMessage = (id: string, hiddenForTeam = true) =>
+  request<{hidden: number; failed: number; hiddenForTeam: boolean}>(
+    `/api/messages?id=${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({hiddenForTeam}),
+    },
+  );
+
+/**
  * Removes a file that was uploaded but never claimed by a message. Called when a
  * send fails after its upload, so the store does not keep orphans.
  */
@@ -249,7 +265,13 @@ export const getPulse = () =>
 
 /** The roster: every account the app has checked in for, freshest first. */
 export const getUsers = () =>
-  request<{users: KnownUser[]; total: number; truncated: boolean}>('/api/users');
+  request<{
+    users: KnownUser[];
+    total: number;
+    truncated: boolean;
+    /** No names could be read, so every row is showing its address. */
+    namesUnavailable: boolean;
+  }>('/api/users');
 
 /**
  * The last message of a thread, for the inbox row. A recording that travelled

@@ -4,7 +4,7 @@ import {useEffect, useMemo, useState} from 'react';
 import type {Conversation} from '@/lib/contract';
 import {INBOX_POLL_MS} from '@/lib/contract';
 import {getInbox} from '@/lib/api';
-import {initialsOf, relativeTime} from '@/lib/format';
+import {displayNameOf, initialsOf, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
 import TiltCard from './TiltCard';
 import {InboxIcon, RefreshIcon} from './icons';
@@ -19,6 +19,12 @@ import {InboxIcon, RefreshIcon} from './icons';
  *
  * Search and the unread filter run on the list already in the browser: it is
  * small, and filtering instantly beats waiting a round trip for every keystroke.
+ *
+ * Rows are titled with the person's **name**, not their address. A list of
+ * emails is a list of identifiers, and the inbox is the screen somebody scans to
+ * find a conversation — which they do by remembering a person. The address is
+ * still in the row's own tooltip and is what the thread header reveals on a
+ * click, so nothing is lost, it is only out of the way.
  */
 
 type InboxViewProps = {
@@ -109,7 +115,9 @@ const InboxView = ({
         return true;
       }
       return (
-        row.email.includes(needle) || row.lastText.toLowerCase().includes(needle)
+        row.email.includes(needle) ||
+        displayNameOf(row.email, row.name).toLowerCase().includes(needle) ||
+        row.lastText.toLowerCase().includes(needle)
       );
     });
   }, [query, rows, unreadOnly]);
@@ -239,7 +247,7 @@ const InboxView = ({
 
                   <div className="flex items-center gap-3">
                     <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-xs font-black text-violet-bright">
-                      {initialsOf(row.email)}
+                      {initialsOf(row.email, row.name)}
                       <span
                         className={`absolute -bottom-0.5 -right-0.5 ${
                           isOnline ? 'dot-online' : 'dot-idle'
@@ -249,8 +257,10 @@ const InboxView = ({
 
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
-                        <span className="truncate text-sm font-bold text-ink">
-                          {row.email}
+                        <span
+                          className="truncate text-sm font-bold text-ink"
+                          title={row.email}>
+                          {displayNameOf(row.email, row.name)}
                         </span>
                         {isOnline ? (
                           <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-mint">

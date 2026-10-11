@@ -1,9 +1,10 @@
 'use client';
 
+import {useState} from 'react';
 import {chatIdFor} from '@/lib/contract';
 import type {PresenceEntry} from '@/lib/contract';
 import type {PresencePayload} from '@/lib/api';
-import {initialsOf, relativeTime} from '@/lib/format';
+import {displayNameOf, initialsOf, relativeTime} from '@/lib/format';
 import TiltCard from './TiltCard';
 import {InboxIcon, LiveIcon} from './icons';
 
@@ -18,6 +19,10 @@ import {InboxIcon, LiveIcon} from './icons';
  * The second section is the panel's own members, which is the heartbeat that
  * makes the app's chat header say "Online now". Seeing it here is also the
  * quickest way to tell that the panel side is working at all.
+ *
+ * Cards carry the person's **name** rather than their address, like every other
+ * screen: who is in the app right now is a question about people. The address is
+ * a click away on the same card.
  */
 
 type LiveViewProps = {
@@ -32,24 +37,39 @@ const Card = ({
 }: {
   entry: PresenceEntry;
   action?: React.ReactNode;
-}) => (
-  <TiltCard max={5} className="glass rim sheen relative overflow-hidden p-4">
-    <div className="flex items-center gap-3">
-      <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-xs font-black text-violet-bright">
-        {initialsOf(entry.user)}
-        <span className="dot-online absolute -bottom-0.5 -right-0.5 border-2 border-base" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-bold text-ink">{entry.user}</p>
-        <p className="text-[11px] text-ink-muted">
-          {entry.device ? `${entry.device} · ` : ''}
-          beat {relativeTime(entry.lastSeen)}
-        </p>
+}) => {
+  const [showEmail, setShowEmail] = useState(false);
+  const name = displayNameOf(entry.user, entry.name);
+
+  return (
+    <TiltCard max={5} className="glass rim sheen relative overflow-hidden p-4">
+      <div className="flex items-center gap-3">
+        <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-xs font-black text-violet-bright">
+          {initialsOf(entry.user, entry.name)}
+          <span className="dot-online absolute -bottom-0.5 -right-0.5 border-2 border-base" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => setShowEmail(value => !value)}
+            aria-expanded={showEmail}
+            title={showEmail ? 'Hide the email' : 'Show the email'}
+            className="focus-ring block max-w-full truncate rounded text-left text-sm font-bold text-ink transition hover:text-violet-bright">
+            {name}
+          </button>
+          <p className="truncate text-[11px] text-ink-muted">
+            {showEmail ? (
+              <span className="text-violet-bright">{entry.user} · </span>
+            ) : null}
+            {entry.device ? `${entry.device} · ` : ''}
+            beat {relativeTime(entry.lastSeen)}
+          </p>
+        </div>
+        {action}
       </div>
-      {action}
-    </div>
-  </TiltCard>
-);
+    </TiltCard>
+  );
+};
 
 const LiveView = ({presence, error, onOpenChat}: LiveViewProps) => {
   const users = presence?.users ?? [];
@@ -110,7 +130,7 @@ const LiveView = ({presence, error, onOpenChat}: LiveViewProps) => {
                 <button
                   type="button"
                   onClick={() => onOpenChat(chatIdFor(entry.user))}
-                  aria-label={`Open the thread with ${entry.user}`}
+                  aria-label={`Open the thread with ${displayNameOf(entry.user, entry.name)}`}
                   className="focus-ring rounded-xl border border-white/10 bg-white/5 p-2 text-ink-muted transition hover:text-ink">
                   <InboxIcon size={15} />
                 </button>

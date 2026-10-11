@@ -3,7 +3,7 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import type {KnownUser} from '@/lib/contract';
 import {getUsers} from '@/lib/api';
-import {initialsOf, relativeTime} from '@/lib/format';
+import {displayNameOf, initialsOf, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
 import {InboxIcon, PeopleIcon, SearchIcon} from './icons';
 
@@ -12,10 +12,20 @@ import {InboxIcon, PeopleIcon, SearchIcon} from './icons';
  * there. Freshest first, so the people who are actually around are at the top.
  *
  * Where Live answers "who is here right now", this one answers "who is there at
- * all" — nothing is filtered by time. The source is the same `presence`
- * collection: the phone writes one heartbeat document per account and keeps
- * rewriting it, so a document is both proof the account exists and the timestamp
- * of its last visit.
+ * all" — nothing is filtered by time. Two sources make that true: the phone's
+ * heartbeat documents, which is what puts somebody here who has signed in but
+ * never written a word, and the conversations themselves, which is what keeps
+ * somebody here whose heartbeat we never received. Both are folded into one row
+ * per account on the server (see /api/users), because a roster with the same
+ * person twice is worse than a short one.
+ *
+ * Rows are shown by the **name they signed in with** — the one the app asked them
+ * for and keeps in its own Firestore — and that is a small decision with a real
+ * one behind it: an email is an identifier, and a list of twenty addresses is not
+ * a list of people. Nothing is invented when a name is missing: the address is
+ * shown instead, because a name made out of an address reads like a real one and
+ * then nobody can tell which rows are people. The address is one click away on
+ * every row either way, and in the thread header once a conversation is open.
  *
  * The honest caveat is in the subtitle, not buried: an account that has never run
  * the app has no document, and a real sign-up list would be the phone's own users
@@ -33,6 +43,7 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
   const [onlineOnly, setOnlineOnly] = useState(false);
   const [users, setUsers] = useState<KnownUser[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const [namesUnavailable, setNamesUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,6 +52,7 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
       const result = await getUsers();
       setUsers(result.users);
       setTruncated(result.truncated);
+      setNamesUnavailable(result.namesUnavailable);
       setError(null);
       setLoading(false);
       return result;
@@ -60,6 +72,7 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
   }, [refresh, refreshSignal]);
 
   const online = users.filter(user => user.online).length;
+  const withMessages = users.filter(user => user.messages > 0).length;
 
   const shown = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -67,7 +80,15 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
       if (onlineOnly && !user.online) {
         return false;
       }
-      return !needle || user.email.includes(needle);
+      if (!needle) {
+        return true;
+      }
+      // Either name or address finds a row: the person searching knows one and
+      // not always the same one.
+      return (
+        user.email.includes(needle) ||
+        displayNameOf(user.email, user.name).toLowerCase().includes(needle)
+      );
     });
   }, [onlineOnly, search, users]);
 
@@ -85,9 +106,9 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
         <div className="min-w-0 flex-1">
           <h1 className="text-lg font-black tracking-tight text-ink">Users</h1>
           <p className="text-xs text-ink-muted">
-            {users.length} {users.length === 1 ? 'account' : 'accounts'} the app has
-            checked in for · {online} in the app now · every account is listed with
-            its last heartbeat
+            {users.length} {users.length === 1 ? 'account' : 'accounts'} have signed
+            in · {online} in the app now · {withMessages} with a conversation · each
+            row shows a name; click it for the email
           </p>
         </div>
 
@@ -96,7 +117,7 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
           <input
             value={search}
             onChange={event => setSearch(event.target.value)}
-            placeholder="Find an email…"
+            placeholder="Find a name or email…"
             className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-ink-subtle sm:w-[190px]"
           />
         </label>
@@ -115,16 +136,25 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
       </div>
 
       <p className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-ink-muted">
-        An account appears here the first time the app runs signed in, and the
-        heartbeat it rewrites is what the &ldquo;last seen&rdquo; column reads. An
-        account that has never opened the app has no row — a full sign-up list
-        lives in the phone app&apos;s own users collection, which this panel has no
-        credentials for.
+        An account appears here the first time the app runs signed in, whether or
+        not it has ever written to the team — that is what the heartbeat is for.
+        The &ldquo;last seen&rdquo; column reads it, and a thread the account has
+        started is listed with it. An account that has never opened the app has no
+        row: a full sign-up list lives in the phone app&apos;s own user records,
+        which this panel has no credentials for.
       </p>
 
       {error ? (
         <p className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
           {error}
+        </p>
+      ) : null}
+
+      {namesUnavailable && users.length ? (
+        <p className="rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[11px] text-amber-100">
+          The app&apos;s sign-in records could not be read, so every row is
+          showing its address. The names themselves live in Firestore — check
+          that this deployment can reach it, then refresh.
         </p>
       ) : null}
 
@@ -170,49 +200,75 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
   );
 };
 
+/**
+ * One account. The name is the row; the email is behind it.
+ *
+ * Clicking the name reveals the address in place rather than opening anything,
+ * because the question "which address is this, exactly?" is asked far more often
+ * than "show me their thread" — and the thread has its own button beside it.
+ */
 const Row = ({
   user,
   onOpenChat,
 }: {
   user: KnownUser;
   onOpenChat: (chatId: string) => void;
-}) => (
-  <li className="glass rim sheen relative flex flex-wrap items-center gap-3 overflow-hidden p-3.5">
-    <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-xs font-black text-violet-bright">
-      {initialsOf(user.email)}
-      <span
-        className={`${user.online ? 'dot-online' : 'dot-idle'} absolute -bottom-0.5 -right-0.5 border-2 border-base`}
-      />
-    </span>
+}) => {
+  const [revealed, setRevealed] = useState(false);
+  const name = displayNameOf(user.email, user.name);
 
-    <div className="min-w-0 flex-1">
-      <p className="truncate text-sm font-bold text-ink">{user.email}</p>
-      <p className="text-[11px] text-ink-muted">
-        {user.online ? (
-          <span className="text-mint">In the app now</span>
-        ) : (
-          <>Last seen {relativeTime(user.lastSeen)}</>
-        )}
-        {' · '}
-        {new Date(user.lastSeen).toLocaleString([], {
-          day: 'numeric',
-          month: 'short',
-          hour: '2-digit',
-          minute: '2-digit',
-        })}
-        {user.device ? ` · ${user.device}` : ''}
-      </p>
-    </div>
+  return (
+    <li className="glass rim sheen relative flex flex-wrap items-center gap-3 overflow-hidden p-3.5">
+      <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-xs font-black text-violet-bright">
+        {initialsOf(user.email, user.name)}
+        <span
+          className={`${user.online ? 'dot-online' : 'dot-idle'} absolute -bottom-0.5 -right-0.5 border-2 border-base`}
+        />
+      </span>
 
-    <button
-      type="button"
-      onClick={() => onOpenChat(user.chatId)}
-      aria-label={`Open the thread with ${user.email}`}
-      className="focus-ring flex shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-ink-muted transition hover:text-ink">
-      <InboxIcon size={15} />
-      <span className="hidden sm:inline">Open chat</span>
-    </button>
-  </li>
-);
+      <div className="min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={() => setRevealed(value => !value)}
+          aria-expanded={revealed}
+          title={revealed ? 'Hide the email' : 'Show the email'}
+          className="focus-ring block max-w-full truncate rounded text-left text-sm font-bold text-ink transition hover:text-violet-bright">
+          {name}
+        </button>
+        <p className="truncate text-[11px] text-ink-muted">
+          {revealed ? (
+            <span className="text-violet-bright">{user.email} · </span>
+          ) : null}
+          {user.online ? (
+            <span className="text-mint">In the app now</span>
+          ) : (
+            <>Last seen {relativeTime(user.lastSeen)}</>
+          )}
+          {' · '}
+          {new Date(user.lastSeen).toLocaleString([], {
+            day: 'numeric',
+            month: 'short',
+            hour: '2-digit',
+            minute: '2-digit',
+          })}
+          {user.device ? ` · ${user.device}` : ''}
+          {' · '}
+          {user.messages === 0
+            ? 'no messages yet'
+            : `${user.messages} message${user.messages === 1 ? '' : 's'}`}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => onOpenChat(user.chatId)}
+        aria-label={`Open the thread with ${name}`}
+        className="focus-ring flex shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-ink-muted transition hover:text-ink">
+        <InboxIcon size={15} />
+        <span className="hidden sm:inline">Open chat</span>
+      </button>
+    </li>
+  );
+};
 
 export default UsersView;

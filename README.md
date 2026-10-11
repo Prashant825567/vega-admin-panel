@@ -25,7 +25,8 @@ Two collections, and nothing else:
 | collection | what is in it |
 | --- | --- |
 | `messages` | one document per message — `chat_id`, `from`, `to`, `text`, `sent_at`, `read`, `image`, `file_id`, and for attachments `media_kind`, `mime`, `media_ms`, `media_bytes` |
-| `presence` | one heartbeat per account — `user`, `role`, `last_seen`, `device`. The panel's own lives at the fixed id `presence_panel_<PANEL_HANDLE>`, so it is one document that is PATCHed and never a set of copies |
+| `presence` | one heartbeat per account — `user`, `role`, `last_seen`, `device`, `name`. The panel's own lives at the fixed id `presence_panel_<PANEL_HANDLE>`, so it is one document that is PATCHed and never a set of copies |
+| Firestore `users` | the phone's own sign-in records — `email`, `name`, `lastLoginAt`. Read-only, over REST, for the names only |
 
 The rules that keep the two sides compatible (all in `lib/contract.ts`):
 
@@ -58,6 +59,44 @@ The rules that keep the two sides compatible (all in `lib/contract.ts`):
 - **the store ignores `Range`.** It advertises `Accept-Ranges: bytes` and then
   answers a ranged request with `200` and the whole file, so `/api/file` cuts the
   byte range itself. See that route for why it matters.
+
+### Where a name comes from
+
+Every screen shows people by the **name they signed in with**, never by a guess.
+
+| source | what it is | when it is used |
+| --- | --- | --- |
+| Firestore `users/{email}` | the name the app asked for and keeps, unique across accounts | first, always |
+| presence `name` | the same name, as the last heartbeat reported it | when Firestore cannot be reached |
+| the address | what we actually know | when there is no name anywhere |
+
+The third row is deliberate and is not a fallback anyone should "fix": a name
+assembled out of an email's first half (`pr3095079@gmail.com` → "Pr3095079") looks
+exactly like a real name, and then no screen can tell the reader which rows are
+people and which are guesses. An address at least says what it is. The address is
+one click away on every row either way — revealed in place, and in the thread
+header once a conversation is open.
+
+The panel reads Firestore over its **REST API** (`lib/server/firestore.ts`), using
+the project id and the public web API key that already ship inside every APK, with
+`FIREBASE_PROJECT_ID` / `FIREBASE_API_KEY` to point it somewhere else. Those are
+not secrets — they are the same public configuration the phone carries — and names
+are cached for a minute so a screen that polls every 30 seconds does not ask
+Google for the same answer twice.
+
+### Deleting: for me, or for everyone
+
+Every delete asks, because the two answers are different actions:
+
+| choice | what happens |
+| --- | --- |
+| **Delete for me** | `hidden_for_team: true` on the document. The panel stops showing it — thread, inbox, unread count — and **the user keeps their copy** on the phone. Reversible. |
+| **Delete for everyone** | the document is deleted. This thread and the user's own chat both lose it, and nothing brings it back. |
+
+The gentler one exists because the alternative people actually reach for is a real
+delete, and a support console where "make this go away on my screen" costs the user
+their own history is a console that gets misused. Nothing about a hidden message is
+rewritten: the phone reads the same document it always did.
 
 ### Nothing here has a ceiling
 
@@ -134,14 +173,15 @@ will only ever see `/api/*`.
 | `GET /api/inbox` | every conversation, grouped server-side, newest activity first. `?q=` and `?unreadOnly=1` also filter server-side. |
 | `GET /api/thread?chatId=` | one thread, oldest first, each message with its `read` receipt. |
 | `POST /api/messages` | send a reply, or an announcement when `chatId` is `chat_broadcast`. |
-| `DELETE /api/messages?id=` | delete one message (moderation). |
+| `PATCH /api/messages?id=` | **hide** messages from the team's own view — the "delete for me" half of a delete. Sends `hiddenForTeam: false` to put them back. |
+| `DELETE /api/messages?id=` | delete one message **for everybody**. The document goes and both sides lose it. |
 | `POST /api/read` | mark the user's messages read — the panel's half of the double tick. Refuses a broadcast. |
 | `POST /api/upload` | multipart upload of an image, a voice note or a video, with the recording length when the browser knows it. Refuses anything that is none of the three; **there is no size cap**, so a refusal on weight comes from the store. |
 | `DELETE /api/upload?id=` | removes a file again. Used when an upload succeeds and the message that was going to carry it does not, so a failed send cannot leave an orphan. |
 | `GET /api/file?id=` | streams a stored file, and serves byte ranges (`206`/`416`) so a recording can be seeked. The store serves files to nobody without the key, so `<img>`/`<audio>`/`<video>` can never point at it directly. |
 | `GET /api/presence` | who is online (users, and panel members). |
 | `POST /api/presence` | the panel's own heartbeat. |
-| `GET /api/users` | the roster: every account the app has checked in for, with its last heartbeat. |
+| `GET /api/users` | the roster: every account that has signed in, folded to one row each — the name it signed in with, its last heartbeat, and how much has been said. |
 | `GET /api/pulse` | the four dashboard numbers. |
 
 `lib/zentra.ts` is the only module that knows the key or the store's REST shapes;
