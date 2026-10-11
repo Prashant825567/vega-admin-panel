@@ -22,3 +22,6 @@ next-env.d.ts
 *.pem
 npm-debug.log*
 yarn-error.log*
+
+# the local production server log
+.vega-panel.log

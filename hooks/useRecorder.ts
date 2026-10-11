@@ -20,14 +20,13 @@
  * - **the clock is not the recorder's.** `elapsedMs` is measured from
  *   `Date.now()` at the moment recording began, so the timer stays truthful even
  *   if the recorder throttles in a background tab.
- * - **the length cap stops the recorder.** A recording that hits the cap ends by
- *   itself and lands in `ready`, so the person sees a clip with a length instead
- *   of an error about size. Hitting the cap is reported through `hitLimit`, which
- *   is what lets the UI say why it stopped.
+ * - **there is no length cap.** A voice note ends when the person presses stop,
+ *   and not before — the panel is where a long explanation is the normal case,
+ *   so the recorder has no clock of its own to run out of. The elapsed timer is
+ *   the only thing counting.
  */
 
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {RECORD_LIMIT_MS} from '@/lib/contract';
 import {explainMediaError, pickAudioMimeType, recordingFileName} from '@/lib/media';
 
 export type RecorderState = 'idle' | 'starting' | 'recording' | 'ready';
@@ -49,8 +48,6 @@ export type Recorder = {
   error: string | null;
   /** 0–1, the loudest moment of the last fraction of a second of microphone. */
   level: number;
-  /** True while the cap is what ended the last recording. */
-  hitLimit: boolean;
   start: () => void;
   stop: () => void;
   /** Stop, release everything and keep nothing. */
@@ -66,7 +63,6 @@ export const useRecorder = (): Recorder => {
   const [clip, setClip] = useState<RecordedClip | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
-  const [hitLimit, setHitLimit] = useState(false);
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -132,7 +128,6 @@ export const useRecorder = (): Recorder => {
       return;
     }
     setError(null);
-    setHitLimit(false);
     setClip(current => {
       if (current) {
         URL.revokeObjectURL(current.url);
@@ -218,14 +213,12 @@ export const useRecorder = (): Recorder => {
       startedAtRef.current = Date.now();
       setState('recording');
 
-      tickRef.current = window.setInterval(() => {
-        const ran = Date.now() - startedAtRef.current;
-        setElapsedMs(ran);
-        if (ran >= RECORD_LIMIT_MS) {
-          setHitLimit(true);
-          recorderRef.current?.stop();
-        }
-      }, 200);
+      // The timer is display only. Nothing here stops the recording — only the
+      // person pressing stop does.
+      tickRef.current = window.setInterval(
+        () => setElapsedMs(Date.now() - startedAtRef.current),
+        200,
+      );
     })();
   }, [release, state, watchLevel]);
 
@@ -260,7 +253,6 @@ export const useRecorder = (): Recorder => {
       return null;
     });
     setElapsedMs(0);
-    setHitLimit(false);
     setState('idle');
   }, []);
 
@@ -272,7 +264,6 @@ export const useRecorder = (): Recorder => {
     clip,
     error,
     level,
-    hitLimit,
     start,
     stop,
     cancel,

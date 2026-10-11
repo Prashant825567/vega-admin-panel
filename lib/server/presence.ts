@@ -5,10 +5,11 @@
  * so the panel's job is small: read the window for the users, and write its own
  * so the app's chat header can honestly say "Online now".
  *
- * The panel's own document id is kept in a module-level variable. Vercel keeps a
- * warm instance around between requests, so a heartbeat is normally ONE PATCH;
- * a cold start pays for a lookup once and then remembers again. That cache is a
- * best effort on purpose — losing it costs one extra request, nothing else.
+ * The panel's own heartbeat lives under **one id the panel chooses**
+ * (`presence_panel_vega-team`), because the store lets a document be created
+ * under a name its client picks — which makes the heartbeat a single PATCH and
+ * nothing else. See `panelDocumentId` for why that replaced the older
+ * "look myself up, cache the id" scheme.
  */
 
 import {
@@ -21,8 +22,8 @@ import {
   chatIdFor,
 } from '../contract';
 import {
+  ZtError,
   createDocument,
-  deleteDocument,
   queryAll,
   queryDocuments,
   updateDocument,
@@ -32,8 +33,24 @@ import {
 export const panelHandle = (): string =>
   (process.env.PANEL_HANDLE || 'vega-team').trim().toLowerCase() || 'vega-team';
 
-/** The document id this instance last wrote, per handle. */
-const knownIds = new Map<string, string>();
+/**
+ * The one document the panel's heartbeat is written to.
+ *
+ * The store has no upsert, and the first version of this looked its own handle up
+ * on every cold start and cached whichever id came back. That turned out to be a
+ * duplicate factory: the store's read side is not always current, so a lookup
+ * that came back empty threw away a perfectly good heartbeat and made another
+ * one — and the presence collection ended up holding four `vega-team` documents,
+ * which is what the Live screen showed as four panels and the app's "Online now"
+ * dot read as one team that was somehow everywhere.
+ *
+ * A *chosen* id removes the lookup, and with it the whole class of problem: there
+ * is nothing to find, nothing to cache, and nothing to duplicate. A beat is one
+ * PATCH; a `404` from that PATCH is the store saying the document is genuinely
+ * gone, which is the one case worth creating it again.
+ */
+export const panelDocumentId = (handle: string = panelHandle()): string =>
+  `presence_panel_${handle}`;
 
 /**
  * One presence document as a screen sees it, or null when it says nothing — no
@@ -117,28 +134,31 @@ export const listKnownUsers = async (): Promise<{
 };
 
 /**
- * Rewrites the panel's own heartbeat. The first time it looks the handle up and
- * keeps whatever id it finds — after that a beat is a single PATCH. A stale id
- * is forgotten and looked up again.
+ * Rewrites the panel's own heartbeat: one PATCH at a fixed id, and nothing else
+ * in the happy path.
  *
- * ## Why this repairs itself
+ * ## What it does when the store says no
  *
  * The store is the one part of this system nobody controls, and it is not quiet
- * about being unhappy: a long-lived document that is rewritten every 20 seconds
- * eventually starts answering PATCH with its own `Failed to update record.`,
- * and a busy hour gets a request that simply times out. Left alone, either one
- * pins the panel as "away" in the app's chat header for as long as it runs — and
- * shows a red banner to somebody whose only mistake was leaving the tab open.
+ * about being unhappy: it refuses writes with a `503 STORAGE_UNAVAILABLE` for a
+ * while and then accepts them again, and a busy hour gets a request that simply
+ * times out. Two things follow from that, and they are the whole design here:
  *
- * So a refused update is treated as a fact about the *document*, not the
- * request: the id is dropped, and if the document was found by lookup it is
- * deleted and a fresh heartbeat is created in its place. Presence is disposable
- * by definition — the worst case is a user seeing the team as away for one
- * heartbeat — which makes throwing the document away the right repair instead of
- * retrying something the store has already refused.
+ * - **a refusal is not a reason to delete anything.** The previous version threw
+ *   the document away and made a new one whenever a PATCH was refused, which on a
+ *   store that refuses writes in bursts meant a fresh heartbeat every few
+ *   minutes and a stray document for each one. A `503` is a fact about the
+ *   store's afternoon, not about our document, so it is passed on as the failure
+ *   it is and the next beat patches the same id.
+ * - **a `404` is.** `DOCUMENT_NOT_FOUND` is the store saying the document is
+ *   genuinely not there, and recreating it is then the correct repair rather
+ *   than a duplicate. `DOCUMENT_ALREADY_EXISTS` coming back from that create is
+ *   the other half of the same story — another instance of the panel beat us to
+ *   it, so the document exists and the next beat patches it.
  */
 export const announcePanel = async (): Promise<{handle: string; lastSeen: number}> => {
   const handle = panelHandle();
+  const id = panelDocumentId(handle);
   const wire: WirePresence = {
     user: handle,
     role: 'panel',
@@ -147,34 +167,23 @@ export const announcePanel = async (): Promise<{handle: string; lastSeen: number
   };
   const lastSeen = Date.parse(wire.last_seen as string);
 
-  const known = knownIds.get(handle);
-  if (known) {
-    try {
-      await updateDocument(PRESENCE, known, wire);
-      return {handle, lastSeen};
-    } catch {
-      knownIds.delete(handle);
+  try {
+    await updateDocument(PRESENCE, id, wire);
+    return {handle, lastSeen};
+  } catch (failure) {
+    if (!(failure instanceof ZtError) || failure.status !== 404) {
+      throw failure;
     }
   }
 
-  const {documents} = await queryDocuments<WirePresence>(PRESENCE, {
-    where: [['user', 'eq', handle]],
-    limit: 1,
-  });
-
-  if (documents.length) {
-    try {
-      await updateDocument(PRESENCE, documents[0].id, wire);
-      knownIds.set(handle, documents[0].id);
+  try {
+    await createDocument<WirePresence>(PRESENCE, wire, id);
+  } catch (failure) {
+    if (failure instanceof ZtError && failure.code === 'DOCUMENT_ALREADY_EXISTS') {
+      // Somebody else's instance created it between our PATCH and our POST.
       return {handle, lastSeen};
-    } catch {
-      // The store handed us this document and then refused to update it. The
-      // document is what is broken, so it goes — see the note above.
-      await deleteDocument(PRESENCE, documents[0].id).catch(() => {});
     }
+    throw failure;
   }
-
-  const created = await createDocument<WirePresence>(PRESENCE, wire);
-  knownIds.set(handle, created.id);
   return {handle, lastSeen};
 };

@@ -1,12 +1,13 @@
 'use client';
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {THREAD_POLL_MS, MAX_MESSAGE_LENGTH, isMediaPlaceholder} from '@/lib/contract';
+import {THREAD_POLL_MS, isMediaPlaceholder} from '@/lib/contract';
+import type {SentAttachment} from '@/lib/contract';
 import type {ThreadMessage} from '@/lib/api';
-import {deleteMessage, getThread, markRead, sendMessage} from '@/lib/api';
+import {deleteMessage, getThread, markRead, sendBatch} from '@/lib/api';
 import {clockTime, groupByDay, initialsOf, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
-import Composer, {type SentAttachment} from './Composer';
+import Composer from './Composer';
 import MediaPlayer from './MediaPlayer';
 import {BackIcon, CloseIcon, RefreshIcon, TicksIcon, TrashIcon} from './icons';
 
@@ -27,6 +28,12 @@ import {BackIcon, CloseIcon, RefreshIcon, TicksIcon, TrashIcon} from './icons';
  * without the key: a screenshot opens large, a voice note plays in its bubble and
  * a video plays there or opens up. `message.media` is what decides which — the
  * same message can be any of the three, and the wire only says which one.
+ *
+ * A reply can carry any number of files, so one press of Send can become several
+ * messages: the words ride on the first, and each file after it lands as a bare
+ * picture, voice note or video underneath. `sendBatch` reports how many of them
+ * the store really took, which is what lets the composer delete the uploads that
+ * nothing points at instead of leaving them stranded in the bucket.
  */
 
 type ThreadViewProps = {
@@ -217,22 +224,22 @@ const ThreadView = ({
   const unreadHere = messages.filter(m => m.from === 'user' && !m.read).length;
 
   const send = useCallback(
-    async (text: string, attachment: SentAttachment | null) => {
-      await sendMessage({
+    async (text: string, attachments: SentAttachment[]) => {
+      const claimed = await sendBatch({
         chatId,
         text,
-        fileId: attachment?.fileId ?? null,
-        kind: attachment?.kind ?? null,
-        mime: attachment?.mime ?? null,
-        durationMs: attachment?.durationMs ?? null,
-        bytes: attachment?.bytes ?? null,
+        attachments,
+        // The first message is the one allowed to throw; a later one is only
+        // ever reported, so the files that did land are kept.
+        onPartial: message => notify(message, 'danger'),
       });
       await load();
       requestAnimationFrame(() => {
         bottomRef.current?.scrollIntoView({behavior: 'smooth', block: 'end'});
       });
+      return claimed;
     },
-    [chatId, load],
+    [chatId, load, notify],
   );
 
   const remove = useCallback(
@@ -341,7 +348,6 @@ const ThreadView = ({
 
       <Composer
         placeholder={`Reply to ${email}…`}
-        maxLength={MAX_MESSAGE_LENGTH}
         onSend={send}
         onError={message => notify(message, 'danger')}
       />

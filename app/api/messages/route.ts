@@ -12,7 +12,6 @@ import type {NextRequest} from 'next/server';
 import {
   ADMIN,
   MESSAGES,
-  MAX_MESSAGE_LENGTH,
   MediaKind,
   WireMessage,
   chatIdFor,
@@ -59,7 +58,9 @@ export const POST = async (request: NextRequest) => {
       );
     }
 
-    const text = (body.text || '').trim().slice(0, MAX_MESSAGE_LENGTH);
+    // No length cap: the words are stored exactly as they were written. The
+    // app's own composer is the only place that limits what *it* types.
+    const text = (body.text || '').trim();
     const fileId = body.fileId?.trim() || null;
     if (!text && !fileId) {
       return Response.json(

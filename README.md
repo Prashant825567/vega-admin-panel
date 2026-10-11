@@ -25,7 +25,7 @@ Two collections, and nothing else:
 | collection | what is in it |
 | --- | --- |
 | `messages` | one document per message — `chat_id`, `from`, `to`, `text`, `sent_at`, `read`, `image`, `file_id`, and for attachments `media_kind`, `mime`, `media_ms`, `media_bytes` |
-| `presence` | one heartbeat per account — `user`, `role`, `last_seen`, `device` |
+| `presence` | one heartbeat per account — `user`, `role`, `last_seen`, `device`. The panel's own lives at the fixed id `presence_panel_<PANEL_HANDLE>`, so it is one document that is PATCHed and never a set of copies |
 
 The rules that keep the two sides compatible (all in `lib/contract.ts`):
 
@@ -59,14 +59,25 @@ The rules that keep the two sides compatible (all in `lib/contract.ts`):
   answers a ranged request with `200` and the whole file, so `/api/file` cuts the
   byte range itself. See that route for why it matters.
 
-How big an attachment may be, and how long a voice note may run, are the two
-numbers in `lib/contract.ts` that a person can actually feel:
+### Nothing here has a ceiling
 
-| kind | ceiling | how it gets there |
-| --- | --- | --- |
-| image | 10 MB | attached as a file |
-| audio | 25 MB | **recorded live**, stopped at 5 minutes (`RECORD_LIMIT_MS`) |
-| video | 50 MB | attached as a file |
+The panel imposes **no limits of its own**, and that is a decision rather than an
+omission: a support console is exactly where a stack trace, a log dump, twenty
+screenshots or a five-minute screen recording is the normal thing to send.
+
+| what | the panel's rule |
+| --- | --- |
+| files in one send | any number, mixed pictures and video, one `+` pick |
+| message length | any; the words are stored exactly as written |
+| voice note length | any; the recorder stops when the person presses stop |
+| file weight | no check at all — the store's own refusal is passed through |
+
+The last row is the honest one. There is no byte cap in `/api/upload` and none in
+the composer, so the only ceiling that exists is the store's, reported in its own
+words (`413`/`503` from ZentraGrid, never a guess about megabytes). The phone app
+keeps limits of its own — ten pictures a send, half a gigabyte a video — because
+a phone is a phone; nothing in this repo enforces them, and nothing here relies
+on them.
 
 ---
 
@@ -125,7 +136,7 @@ will only ever see `/api/*`.
 | `POST /api/messages` | send a reply, or an announcement when `chatId` is `chat_broadcast`. |
 | `DELETE /api/messages?id=` | delete one message (moderation). |
 | `POST /api/read` | mark the user's messages read — the panel's half of the double tick. Refuses a broadcast. |
-| `POST /api/upload` | multipart upload of an image, a voice note or a video, with the recording length when the browser knows it. Refuses anything else and anything over its cap. |
+| `POST /api/upload` | multipart upload of an image, a voice note or a video, with the recording length when the browser knows it. Refuses anything that is none of the three; **there is no size cap**, so a refusal on weight comes from the store. |
 | `DELETE /api/upload?id=` | removes a file again. Used when an upload succeeds and the message that was going to carry it does not, so a failed send cannot leave an orphan. |
 | `GET /api/file?id=` | streams a stored file, and serves byte ranges (`206`/`416`) so a recording can be seeked. The store serves files to nobody without the key, so `<img>`/`<audio>`/`<video>` can never point at it directly. |
 | `GET /api/presence` | who is online (users, and panel members). |
@@ -175,7 +186,11 @@ The composer's mic button and the players in a bubble are the browser's own:
 ours — see `lib/media.ts` and `hooks/useRecorder.ts`) and an `<audio>`/`<video>`
 to play back. Both are worth knowing the shape of before changing them:
 
-- **only the microphone is recorded.** A screenshot and a video are picked from
+- **one `+` takes everything.** Pictures and video arrive through a single
+  picker that opens the gallery and accepts both, many at a time, and lands them
+  in one strip. Nothing uploads until Send, and then every file goes up in the
+  order it was picked;
+- **only the microphone is recorded.** Screenshots and video are picked from
   disk. A screen recording is made by the operating system, and there is no reason
   to ask for somebody's webcam to talk about a playback bug;
 - **the container is negotiated, not assumed.** Chrome and Firefox record WebM,
@@ -185,11 +200,14 @@ to play back. Both are worth knowing the shape of before changing them:
 - **the stream is always released** — on stop, on cancel, on an error, and on
   unmount. A microphone left open keeps the browser's recording indicator lit and
   the device busy for every other tab;
-- **the recorder stops at the cap**, it does not fail at the end with "too big".
-  `RECORD_LIMIT_MS` is what ends it, and the UI says so;
+- **the recorder has no cap.** Nothing but the stop button ends a recording —
+  the timer is display only, which is what makes a long explanation possible;
 - **nothing uploads until Send is pressed**, so a file picked and thrown away
-  leaves nothing in the store. One path uploads all three kinds, and it deletes
-  the file again if the message write then fails;
+  leaves nothing in the store;
+- **a send that dies halfway is not a send that died.** The files go up first,
+  then one message is written per file and the caller reports how many landed;
+  any upload no message points at is deleted again, so a half-failed batch does
+  not leave bytes in the store that nothing can ever show;
 - **one voice note plays at a time** — a module-level registry pauses the last
   one, which is the one behaviour every messenger has and a naive tag does not.
 

@@ -8,12 +8,14 @@
  */
 
 import {
+  MEDIA_LABEL,
   mediaLabelOf,
   type Conversation,
   type KnownUser,
   type MediaKind,
   type PresenceEntry,
   type Pulse,
+  type SentAttachment,
   type ThreadMessage,
   type WireMessage,
 } from './contract';
@@ -76,7 +78,6 @@ export const getThread = (chatId: string) =>
     email: string;
     messages: ThreadMessage[];
     truncated: boolean;
-    maxLength: number;
   }>(`/api/thread?chatId=${encodeURIComponent(chatId)}`);
 
 // ---------------------------------------------------------------------------
@@ -105,6 +106,75 @@ export const sendMessage = (body: {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   });
+
+/**
+ * The message fields a file contributes, or nothing at all when there is none.
+ */
+const describe = (attachment?: SentAttachment) => ({
+  fileId: attachment?.fileId ?? null,
+  kind: attachment?.kind ?? null,
+  mime: attachment?.mime ?? null,
+  durationMs: attachment?.durationMs ?? null,
+  bytes: attachment?.bytes ?? null,
+});
+
+/**
+ * Sends one composer's worth of things: the words, plus every file that came
+ * with them — in as many messages as there are files, because the wire carries
+ * one file per message (that is the shape the phone already reads).
+ *
+ * The words ride on the **first** message, so the thread reads in the order it
+ * was written: the sentence, then the twenty screenshots it was about. Every file
+ * after that travels as a bare `📷 Screenshot` / `🎤 Voice note` / `🎥 Video`,
+ * which is what the app's list shows for a message with no words of its own.
+ *
+ * **What it returns is how many of those messages really landed**, and that
+ * number is the point of the function: a send that dies halfway must not look
+ * like a send that died completely. So the first message is allowed to throw —
+ * nothing exists yet, so the caller can safely drop every upload — while a later
+ * one is not: it is reported through `onPartial` and counted, so the files whose
+ * messages did land are kept.
+ */
+export const sendBatch = async ({
+  chatId,
+  text,
+  attachments,
+  onPartial,
+}: {
+  chatId: string;
+  text: string;
+  attachments: SentAttachment[];
+  /** Told when only some of a batch went, with the reason for the rest. */
+  onPartial?: (message: string) => void;
+}): Promise<number> => {
+  const [first, ...rest] = attachments;
+  if (!first && !text.trim()) {
+    return 0;
+  }
+
+  await sendMessage({chatId, text, ...describe(first)});
+  let claimed = first ? 1 : 0;
+
+  for (const extra of rest) {
+    try {
+      await sendMessage({
+        chatId,
+        text: MEDIA_LABEL[extra.kind],
+        ...describe(extra),
+      });
+      claimed += 1;
+    } catch (failure) {
+      onPartial?.(
+        `Sent ${claimed} of ${attachments.length} — ${
+          (failure as Error).message || 'the store refused the rest'
+        }`,
+      );
+      break;
+    }
+  }
+
+  return claimed;
+};
 
 export const deleteMessage = (id: string) =>
   request<{id: string; deleted: boolean}>(

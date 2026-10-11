@@ -4,14 +4,14 @@ import {useCallback, useEffect, useState} from 'react';
 import {
   BROADCAST_CHAT,
   BROADCAST_LIMIT,
-  MAX_MESSAGE_LENGTH,
   isMediaPlaceholder,
 } from '@/lib/contract';
+import type {SentAttachment} from '@/lib/contract';
 import type {ThreadMessage} from '@/lib/api';
-import {deleteMessage, getThread, sendMessage} from '@/lib/api';
+import {deleteMessage, getThread, sendBatch} from '@/lib/api';
 import {clockTime, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
-import Composer, {type SentAttachment} from './Composer';
+import Composer from './Composer';
 import MediaPlayer from './MediaPlayer';
 import {MegaphoneIcon, TrashIcon} from './icons';
 
@@ -27,9 +27,10 @@ import {MegaphoneIcon, TrashIcon} from './icons';
  *   read — the app only marks messages inside a user's own thread;
  * - deleting removes it for everybody, which is why it asks first.
  *
- * An announcement can carry the same attachments a reply can — a screenshot, a
- * voice note or a screen recording — because "the app will be down for ten
- * minutes" is often best said out loud.
+ * An announcement can carry the same attachments a reply can — any number of
+ * them, mixed — because "the app will be down for ten minutes" is often best said
+ * out loud, and one announcement with the four screenshots that show it is kinder
+ * than five announcements in a row.
  */
 
 type BroadcastViewProps = {
@@ -70,18 +71,16 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
   }, [refresh, refreshSignal]);
 
   const post = useCallback(
-    async (text: string, attachment: SentAttachment | null) => {
-      await sendMessage({
+    async (text: string, attachments: SentAttachment[]) => {
+      const claimed = await sendBatch({
         chatId: BROADCAST_CHAT,
         text,
-        fileId: attachment?.fileId ?? null,
-        kind: attachment?.kind ?? null,
-        mime: attachment?.mime ?? null,
-        durationMs: attachment?.durationMs ?? null,
-        bytes: attachment?.bytes ?? null,
+        attachments,
+        onPartial: message => notify(message, 'danger'),
       });
       await load();
       notify('Announcement posted — everyone sees it', 'ok');
+      return claimed;
     },
     [load, notify],
   );
@@ -203,7 +202,6 @@ const BroadcastView = ({notify, refreshSignal, onCount}: BroadcastViewProps) => 
 
       <Composer
         placeholder="Announce something to everyone…"
-        maxLength={MAX_MESSAGE_LENGTH}
         onSend={post}
         onError={message => notify(message, 'danger')}
         sendLabel="Announce"

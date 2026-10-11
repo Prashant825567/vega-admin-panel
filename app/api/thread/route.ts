@@ -10,7 +10,6 @@
 import type {NextRequest} from 'next/server';
 import {
   MESSAGES,
-  MAX_MESSAGE_LENGTH,
   SCAN_LIMIT,
   MEDIA_LABEL,
   ThreadMessage,
@@ -75,7 +74,6 @@ export const GET = async (request: NextRequest) => {
       email: emailOf(chatId),
       messages,
       truncated,
-      maxLength: MAX_MESSAGE_LENGTH,
     });
   } catch (error) {
     return toErrorResponse(error);

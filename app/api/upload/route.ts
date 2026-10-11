@@ -10,9 +10,11 @@
  * - **video** — a screen recording, which only the panel makes.
  *
  * Anything else (a PDF, a zip, an apk) is refused, because the thread is a
- * support conversation and not a file drop. The size cap depends on the kind —
- * see MEDIA_LIMITS — and the recording length, when the recorder sends one, is
- * stored with the message so a player can draw the duration before it plays.
+ * support conversation and not a file drop. **There is no size cap here** — see
+ * the note on limits in lib/contract.ts — so the only refusal on weight comes
+ * from the store itself, and it is passed through in its own words. The
+ * recording length, when the recorder sends one, is stored with the message so a
+ * player can draw the duration before it plays.
  *
  * The stored file is keyed, so its URL is useless in a browser: the message
  * carries the file id and the thread renders it through /api/file.
@@ -23,22 +25,10 @@
  */
 
 import type {NextRequest} from 'next/server';
-import {
-  MEDIA_LIMITS,
-  MediaKind,
-  kindFromMime,
-  mediaLabelOf,
-} from '@/lib/contract';
+import {MediaKind, kindFromMime, mediaLabelOf} from '@/lib/contract';
 import {deleteFile, fileUrl, toErrorResponse, uploadFile} from '@/lib/zentra';
 
 export const dynamic = 'force-dynamic';
-
-/** What a kind is called when the panel has to explain the cap. */
-const KIND_NAME: Record<MediaKind, string> = {
-  image: 'Screenshot',
-  audio: 'Voice note',
-  video: 'Video',
-};
 
 /**
  * The kind of an upload, for the cases where the browser sends no mime at all
@@ -104,18 +94,8 @@ export const POST = async (request: NextRequest) => {
       );
     }
 
-    const cap = MEDIA_LIMITS[kind];
-    if (file.size > cap) {
-      return Response.json(
-        {
-          error: `${KIND_NAME[kind]} is too big — ${
-            Math.round(cap / (1024 * 1024))
-          } MB is the limit`,
-        },
-        {status: 413},
-      );
-    }
-
+    // No size check on purpose: whatever the store accepts is accepted, and
+    // whatever it refuses comes back with its own explanation.
     const stored = await uploadFile(file);
     const durationMs = durationOf(form?.get('durationMs'));
 

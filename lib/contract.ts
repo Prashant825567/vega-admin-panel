@@ -18,8 +18,6 @@ export const ADMIN = 'admin';
 /** The announcement thread everyone in the app sees. */
 export const BROADCAST_CHAT = 'chat_broadcast';
 
-/** Longest message the app's composer allows; the panel matches it. */
-export const MAX_MESSAGE_LENGTH = 1000;
 /** Newest messages the app shows in one thread. */
 export const THREAD_LIMIT = 200;
 /** The app shows this many past announcements. */
@@ -56,26 +54,33 @@ export type ZtWhere = [field: string, operator: string, value: string];
 export type MediaKind = 'image' | 'audio' | 'video';
 
 /**
- * How big a file may be, per kind.
+ * There are no ceilings on this side of the fence, and that is deliberate.
  *
- * A screenshot is one frame; a voice note is minutes of talk; a screen recording
- * is both at once. The caps differ because the costs do. These are the panel's
- * own ceilings — the store is asked to hold the bytes, and an upload over its own
- * limit fails with the store's message, which is surfaced as-is.
+ * The panel accepts **any number** of files in one go, a mix of pictures and
+ * video in the same send, a voice note that runs as long as whoever is talking,
+ * and a message as long as the answer needs to be. A support console is exactly
+ * where a limit gets in the way: a stack trace, a log dump, a five-minute screen
+ * recording and twenty screenshots are all normal things for the team to send.
+ *
+ * The one real ceiling is the store's, and it is passed through as it is — an
+ * upload it refuses comes back in its own words instead of being turned into a
+ * guess about megabytes. The phone app keeps limits of its own (ten pictures a
+ * send, half a gigabyte a video) because a phone is a phone; nothing here
+ * enforces them.
  */
-export const MEDIA_LIMITS: Record<MediaKind, number> = {
-  image: 10 * 1024 * 1024,
-  audio: 25 * 1024 * 1024,
-  video: 50 * 1024 * 1024,
-};
 
 /**
- * How long a voice note may run. A cap in *time* is the honest one for a
- * recorder: it stops while the person can still see the timer, instead of
- * failing at the end with "too big". Video is uploaded rather than recorded, so
- * it has no clock — only the byte cap in MEDIA_LIMITS.
+ * A file that is already in the store, described well enough for a message to
+ * point at it. The composer produces one per upload; the message route consumes
+ * it.
  */
-export const RECORD_LIMIT_MS = 5 * 60_000;
+export type SentAttachment = {
+  fileId: string;
+  kind: MediaKind;
+  mime: string;
+  durationMs: number | null;
+  bytes: number | null;
+};
 
 /** What a message with no words says in its place. */
 export const MEDIA_LABEL: Record<MediaKind, string> = {

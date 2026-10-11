@@ -3,9 +3,8 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {deleteUploadedFile, uploadMedia} from '@/lib/api';
 import {
-  MEDIA_LIMITS,
   MediaKind,
-  RECORD_LIMIT_MS,
+  type SentAttachment,
   kindFromMime,
 } from '@/lib/contract';
 import {fileSize} from '@/lib/format';
@@ -13,11 +12,11 @@ import {formatClip, formatTimer, recordingSupport} from '@/lib/media';
 import useRecorder from '@/hooks/useRecorder';
 import {
   CloseIcon,
-  ImageIcon,
+  ExpandIcon,
   MicIcon,
+  PlusIcon,
   SendIcon,
   StopIcon,
-  VideoIcon,
 } from './icons';
 
 /**
@@ -25,36 +24,37 @@ import {
  * by a thread and by Broadcast, because both write the same kind of document and
  * both deserve the same rules:
  *
- * - sending is disabled while there is nothing to send, and while one is in
- *   flight, so a double click can never post twice;
- * - the words are kept on a failure (the caller throws and this puts them back),
- *   because losing a half-written answer to a dropped connection is the one
- *   thing that makes an internal tool infuriating;
- * - ⌘/Ctrl + Enter sends; Enter alone is a newline, as it should be in a box
- *   that people paste stack traces into;
- * - **a voice note is recorded here** (mediaRecorder over the microphone) — the
- *   mic button only appears where that is actually possible, which means an
- *   https origin or localhost;
- * - **everything else is a file.** A screenshot and a video are picked, not
- *   captured: a screen recording is made by the operating system, and there is
- *   no reason to ask for a webcam to discuss a playback bug;
- * - **nothing uploads until Send is pressed.** A file picked and then thrown
- *   away leaves nothing behind in the store, and a recording abandoned
- *   mid-thought costs exactly nothing. One path uploads all three kinds, so an
- *   image, a voice note and a video cannot drift apart — and if the upload
- *   succeeds but the message does not, the file is deleted again.
+ * - **one + button, every kind of file.** The dialog opens on the gallery and
+ *   accepts pictures and recordings together, so a mixed send — twelve
+ *   screenshots and the screen recording that goes with them — is one gesture
+ *   rather than twelve. Everything picked waits in one strip and goes up
+ *   together.
+ * - **no ceilings.** No cap on how many files ride along, no cap on how long a
+ *   message is, no cap on how long a voice note runs. This is the console, not
+ *   the phone: the long explanation, the log dump and the twenty screenshots are
+ *   the normal case. The only refusal on weight comes from the store, in its own
+ *   words.
+ * - **nothing uploads until Send is pressed.** Files picked and then thrown away
+ *   leave nothing behind in the store, and a recording abandoned mid-thought
+ *   costs exactly nothing.
+ * - **a send that dies halfway is not a send that died.** The files go up first,
+ *   then the caller writes one message per file and says how many landed; any
+ *   upload no message points at is deleted again. The words — and every file the
+ *   caller refused — stay in the box, because losing a half-written answer to a
+ *   dropped connection is the one thing that makes an internal tool infuriating.
+ * - ⌘/Ctrl + Enter sends; Enter alone is a newline, as it should be in a box that
+ *   people paste stack traces into.
+ *
+ * A voice note is recorded here (MediaRecorder over the microphone), so the mic
+ * button only appears where that is actually possible: an https origin or
+ * localhost. Everything else is a file — a screen recording is made by the
+ * operating system, and there is no reason to ask for a webcam to discuss a
+ * playback bug.
  */
 
-/** What the caller gets back about the file that just went up. */
-export type SentAttachment = {
-  fileId: string;
-  kind: MediaKind;
-  mime: string;
-  durationMs: number | null;
-  bytes: number | null;
-};
-
 type Pending = {
+  /** A local key: the file has no id yet, and two photos can share a name. */
+  key: string;
   kind: MediaKind;
   file: File;
   /** Object URL of the local file, so the preview is the actual thing. */
@@ -62,35 +62,84 @@ type Pending = {
   /** Only a recording knows this before it is uploaded. */
   durationMs: number | null;
   bytes: number;
-  /** The recorder's own length cap is what ended it, not the person's finger. */
-  capped: boolean;
 };
 
 type ComposerProps = {
   placeholder: string;
-  maxLength: number;
-  /** Sends and resolves once the server has it; throw to keep the words. */
-  onSend: (text: string, attachment: SentAttachment | null) => Promise<void>;
+  /**
+   * Sends everything the person put together and resolves with **how many files
+   * the store really took**. Throw to say nothing landed: every upload is then
+   * taken back out again.
+   */
+  onSend: (text: string, attachments: SentAttachment[]) => Promise<number>;
   onError: (message: string) => void;
   disabled?: boolean;
   /** Broadcast needs a louder button than a reply does. */
   sendLabel?: string;
 };
 
+const VIDEO_EXTENSIONS = ['mp4', 'mov', 'mkv', 'webm', 'm4v', '3gp', 'avi'];
+const IMAGE_EXTENSIONS = [
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'gif',
+  'heic',
+  'heif',
+  'bmp',
+  'avif',
+];
+
+const extensionOf = (name: string): string =>
+  (name || '').split('.').pop()?.toLowerCase() || '';
+
+/**
+ * What a picked file is.
+ *
+ * The mime is trusted first. When the browser sends none — which a gallery on
+ * some phones does — the extension decides, and a file with neither is treated
+ * as a picture, because that is what a media picker hands over. A file that
+ * declares itself as neither (a PDF, a zip) returns null and is refused.
+ */
+const kindOfFile = (file: File): MediaKind | null => {
+  const fromMime = kindFromMime(file.type || '');
+  if (fromMime) {
+    return fromMime;
+  }
+  const extension = extensionOf(file.name);
+  if (VIDEO_EXTENSIONS.includes(extension)) {
+    return 'video';
+  }
+  if (IMAGE_EXTENSIONS.includes(extension)) {
+    return 'image';
+  }
+  return file.type ? null : 'image';
+};
+
+const kindName = (kind: MediaKind): string =>
+  kind === 'video' ? 'Video' : kind === 'audio' ? 'Voice note' : 'Picture';
+
 const Composer = ({
   placeholder,
-  maxLength,
   onSend,
   onError,
   disabled = false,
   sendLabel,
 }: ComposerProps) => {
   const [text, setText] = useState('');
-  const [pending, setPending] = useState<Pending | null>(null);
+  const [pending, setPending] = useState<Pending[]>([]);
   const [sending, setSending] = useState(false);
+  /** How far the uploads have got, so twenty files are not a blind spinner. */
+  const [progress, setProgress] = useState<{done: number; total: number} | null>(
+    null,
+  );
   const [canRecord, setCanRecord] = useState(false);
+  /** A pending video the person wants to look at before sending it. */
+  const [watching, setWatching] = useState<Pending | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const counter = useRef(0);
   const recorder = useRecorder();
   const {
     state: recorderState,
@@ -105,194 +154,257 @@ const Composer = ({
   // second one.
   useEffect(() => setCanRecord(recordingSupport()), []);
 
-  /** A finished recording becomes the pending attachment, once. */
+  /** Object URLs hold the file in memory, so they are released deliberately. */
+  const release = useCallback((item: Pending) => {
+    URL.revokeObjectURL(item.preview);
+  }, []);
+
+  // Leaving the screen releases whatever was still waiting — the recorder's own
+  // hook does the same for the microphone.
+  const live = useRef<Pending[]>([]);
+  live.current = pending;
+  useEffect(
+    () => () => {
+      live.current.forEach(item => URL.revokeObjectURL(item.preview));
+    },
+    [],
+  );
+
+  /** A finished recording is appended, so several notes can be sent together. */
   useEffect(() => {
     if (recorderState !== 'ready' || !clip) {
       return;
     }
-    setPending({
-      kind: 'audio',
-      file: clip.file,
-      // Our own URL: the recorder's is released the moment we take the file.
-      preview: URL.createObjectURL(clip.file),
-      durationMs: clip.durationMs,
-      bytes: clip.bytes,
-      // Read before `discardClip` resets the flag below.
-      capped: recorder.hitLimit,
-    });
+    setPending(current => [
+      ...current,
+      {
+        key: `f${(counter.current += 1)}`,
+        kind: 'audio',
+        file: clip.file,
+        // Our own URL: the recorder's is released the moment we take the file.
+        preview: URL.createObjectURL(clip.file),
+        durationMs: clip.durationMs,
+        bytes: clip.bytes,
+      },
+    ]);
     discardClip();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip, discardClip, recorderState]);
 
-  // Object URLs hold the file in memory until they are released.
-  useEffect(
-    () => () => {
-      if (pending?.preview) {
-        URL.revokeObjectURL(pending.preview);
-      }
-    },
-    [pending],
-  );
-
-  const clearPending = useCallback(() => {
-    setPending(current => {
-      if (current?.preview) {
-        URL.revokeObjectURL(current.preview);
-      }
-      return null;
-    });
-  }, []);
-
-  /**
-   * Opens the file dialog already filtered. The `accept` is set on the element
-   * rather than in state, because state would not have re-rendered before the
-   * click arrives and the dialog would open with the previous filter.
-   */
-  const openPicker = useCallback((accept: string) => {
-    const input = inputRef.current;
-    if (!input) {
-      return;
-    }
-    input.accept = accept;
-    input.click();
-  }, []);
-
-  const pickFile = useCallback(
-    (file: File | undefined) => {
-      if (!file) {
+  const pickFiles = useCallback(
+    (files: FileList | null) => {
+      if (!files?.length) {
         return;
       }
-      const extension = (file.name || '').split('.').pop()?.toLowerCase() || '';
-      const kind =
-        kindFromMime(file.type) ||
-        (['mp4', 'mov', 'mkv', 'webm'].includes(extension) ? 'video' : 'image');
-      if (kind === 'audio') {
-        onError('Record a voice note with the mic — the attach button is for files');
-        return;
-      }
-      if (file.size > MEDIA_LIMITS[kind]) {
-        onError(
-          `${kind === 'video' ? 'That video' : 'That screenshot'} is over ${Math.round(
-            MEDIA_LIMITS[kind] / 1024 / 1024,
-          )} MB`,
-        );
-        return;
-      }
-      setPending(current => {
-        if (current?.preview) {
-          URL.revokeObjectURL(current.preview);
+      const accepted: Pending[] = [];
+      const refused: string[] = [];
+      Array.from(files).forEach(file => {
+        const kind = kindOfFile(file);
+        if (kind === 'audio') {
+          refused.push(`${file.name} is audio — record it with the mic`);
+          return;
         }
-        return {
+        if (!kind) {
+          refused.push(`${file.name} is neither a picture nor a video`);
+          return;
+        }
+        accepted.push({
+          key: `f${(counter.current += 1)}`,
           kind,
           file,
           preview: URL.createObjectURL(file),
           durationMs: null,
           bytes: file.size,
-          // An uploaded video knows its own length from its metadata; the player
-          // reads it there instead of being told.
-          capped: false,
-        };
+        });
       });
+      if (accepted.length) {
+        setPending(current => [...current, ...accepted]);
+      }
+      if (refused.length) {
+        onError(refused.join(' · '));
+      }
     },
     [onError],
   );
 
+  const removeAt = useCallback(
+    (key: string) => {
+      setPending(current => {
+        const gone = current.find(item => item.key === key);
+        if (gone) {
+          release(gone);
+        }
+        return current.filter(item => item.key !== key);
+      });
+    },
+    [release],
+  );
+
+  const clearPending = useCallback(() => {
+    setPending(current => {
+      current.forEach(release);
+      return [];
+    });
+  }, [release]);
+
+  /** Takes back every upload that no message ended up pointing at. */
+  const dropOrphans = useCallback(async (orphans: SentAttachment[]) => {
+    for (const orphan of orphans) {
+      try {
+        await deleteUploadedFile(orphan.fileId);
+      } catch {
+        // Nothing useful to say: the send failure is the real message.
+      }
+    }
+  }, []);
+
   const send = useCallback(async () => {
     const words = text.trim();
-    if (disabled || sending || (!words && !pending)) {
+    if (disabled || sending || (!words && !pending.length)) {
       return;
     }
     setSending(true);
-    let uploaded: string | null = null;
+    const uploaded: SentAttachment[] = [];
     try {
-      // Upload first, then store the message that points at it — the same order
-      // the phone uses, so a message never claims a file that is not there.
-      let attachment: SentAttachment | null = null;
-      if (pending) {
-        const stored = await uploadMedia(pending.file, pending.durationMs ?? undefined);
-        uploaded = stored.id;
-        attachment = {
+      // Upload first, then store the messages that point at it — the same order
+      // the phone uses, so a message never claims a file that is not there. One
+      // at a time, in the order they were picked: the thread will read the same
+      // way it was written.
+      if (pending.length) {
+        setProgress({done: 0, total: pending.length});
+      }
+      for (const item of pending) {
+        const stored = await uploadMedia(
+          item.file,
+          item.durationMs ?? undefined,
+        );
+        uploaded.push({
           fileId: stored.id,
           kind: stored.kind,
-          mime: stored.mimeType || pending.file.type,
-          durationMs: stored.durationMs ?? pending.durationMs,
-          bytes: stored.size ?? pending.bytes,
-        };
+          mime: stored.mimeType || item.file.type,
+          durationMs: stored.durationMs ?? item.durationMs,
+          bytes: stored.size ?? item.bytes,
+        });
+        setProgress({done: uploaded.length, total: pending.length});
       }
-      await onSend(words, attachment);
+
+      const claimed = await onSend(words, uploaded);
+      // Whatever the caller did not claim belongs to no message: take it back.
+      await dropOrphans(uploaded.slice(claimed));
       setText('');
       clearPending();
       textRef.current?.focus();
     } catch (error) {
-      // The file went up but the message did not: take the file back out, so an
-      // abandoned send does not leave bytes nothing can ever reference.
-      if (uploaded) {
-        try {
-          await deleteUploadedFile(uploaded);
-        } catch {
-          // Nothing useful to say: the send failure is the real message.
-        }
-      }
-      // Everything stays put — the words, the recording, the cursor.
+      // Nothing was claimed — the caller throws only when the first message
+      // failed — so every upload goes back out with it.
+      await dropOrphans(uploaded);
+      // Everything stays put: the words, the files, the cursor.
       onError((error as Error).message || 'Could not send that');
     } finally {
+      setProgress(null);
       setSending(false);
     }
-  }, [clearPending, disabled, onError, onSend, pending, sending, text]);
+  }, [
+    clearPending,
+    disabled,
+    dropOrphans,
+    onError,
+    onSend,
+    pending,
+    sending,
+    text,
+  ]);
 
   const recording = recorderState === 'recording';
   const starting = recorderState === 'starting';
   const canSend =
-    (!!text.trim() || !!pending) && !disabled && !sending && !recording;
-  const nearlyFull = text.length > maxLength - 60;
+    (!!text.trim() || !!pending.length) && !disabled && !sending && !recording;
+  const readyBytes = pending.reduce((total, item) => total + item.bytes, 0);
 
   return (
     <div className="glass sheen relative p-3">
-      {pending ? (
-        <div className="glass-soft mb-2 flex items-center gap-3 p-2">
-          {pending.kind === 'image' ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={pending.preview}
-              alt={pending.file.name}
-              className="h-11 w-11 rounded-lg object-cover"
-            />
-          ) : pending.kind === 'video' ? (
-            <video
-              src={pending.preview}
-              controls
-              playsInline
-              className="h-16 w-28 shrink-0 rounded-lg border border-white/10 bg-black object-contain"
-            />
-          ) : (
-            <audio
-              src={pending.preview}
-              controls
-              className="h-9 w-44 shrink-0"
-            />
-          )}
-
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs text-ink">
-              {pending.kind === 'audio'
-                ? `Voice note · ${formatClip(pending.durationMs)}`
-                : pending.kind === 'video'
-                ? `Video · ${pending.file.name}`
-                : pending.file.name}
-            </p>
+      {pending.length ? (
+        <div className="glass-soft mb-2 p-2">
+          <div className="mb-2 flex items-center justify-between gap-3">
             <p className="text-[11px] text-ink-muted">
-              {fileSize(pending.bytes)} · uploads when you press send
-              {pending.capped ? ` · stopped at the ${formatClip(RECORD_LIMIT_MS)} limit` : ''}
+              <span className="font-bold text-ink">
+                {pending.length} {pending.length === 1 ? 'file' : 'files'}
+              </span>{' '}
+              ready · {fileSize(readyBytes)} · uploads when you press send
             </p>
+            {pending.length > 1 ? (
+              <button
+                type="button"
+                onClick={clearPending}
+                className="focus-ring rounded-lg px-2 py-1 text-[11px] text-ink-muted transition hover:bg-white/5 hover:text-danger">
+                Clear all
+              </button>
+            ) : null}
           </div>
 
-          <button
-            type="button"
-            aria-label="Throw this away"
-            onClick={clearPending}
-            className="focus-ring rounded-lg p-1.5 text-ink-muted hover:bg-white/5 hover:text-ink">
-            <CloseIcon size={16} />
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {pending.map(item => (
+              <div
+                key={item.key}
+                className="group/chip relative flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] p-1.5 pr-2">
+                {item.kind === 'image' ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={item.preview}
+                    alt={item.file.name}
+                    className="h-11 w-11 shrink-0 rounded-lg object-cover"
+                  />
+                ) : item.kind === 'video' ? (
+                  <button
+                    type="button"
+                    aria-label={`Play ${item.file.name}`}
+                    onClick={() => setWatching(item)}
+                    className="focus-ring relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black">
+                    {/* `#t=0.1` asks the browser for a real frame rather than a
+                        black box — the same trick a video thumbnail uses. */}
+                    <video
+                      src={`${item.preview}#t=0.1`}
+                      muted
+                      playsInline
+                      preload="metadata"
+                      className="h-full w-full object-cover"
+                    />
+                    <span className="absolute inset-0 flex items-center justify-center bg-black/35">
+                      <ExpandIcon size={13} className="text-ink" />
+                    </span>
+                  </button>
+                ) : (
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-cyan/40 bg-cyan/15">
+                    <MicIcon size={16} className="text-cyan" />
+                  </span>
+                )}
+
+                <div className="min-w-0 max-w-[10rem]">
+                  <p className="truncate text-[11px] text-ink">
+                    {item.kind === 'audio'
+                      ? `Voice note · ${formatClip(item.durationMs)}`
+                      : item.file.name}
+                  </p>
+                  <p className="text-[10px] text-ink-subtle">
+                    {kindName(item.kind)} · {fileSize(item.bytes)}
+                  </p>
+                </div>
+
+                {item.kind === 'audio' ? (
+                  // A note has to be listenable before it is sent, or the only
+                  // way to check it is to send it to a real user.
+                  <audio src={item.preview} controls className="h-8 w-40" />
+                ) : null}
+
+                <button
+                  type="button"
+                  aria-label={`Remove ${item.file.name}`}
+                  onClick={() => removeAt(item.key)}
+                  className="focus-ring rounded-lg p-1 text-ink-muted transition hover:bg-white/10 hover:text-danger">
+                  <CloseIcon size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -332,7 +444,7 @@ const Composer = ({
           </span>
 
           <span className="shrink-0 text-[11px] text-ink-subtle">
-            / {formatClip(RECORD_LIMIT_MS)}
+            no limit — press the square when you are done
           </span>
 
           <button
@@ -355,22 +467,12 @@ const Composer = ({
         <div className="flex items-end gap-2">
           <button
             type="button"
-            aria-label="Attach a screenshot"
-            title="Attach a screenshot"
-            onClick={() => openPicker('image/*')}
+            aria-label="Attach pictures or videos"
+            title="Attach pictures or videos"
+            onClick={() => inputRef.current?.click()}
             disabled={disabled || sending}
             className="focus-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet/40 bg-violet/15 text-violet-bright transition hover:bg-violet/25 disabled:opacity-50">
-            <ImageIcon size={18} />
-          </button>
-
-          <button
-            type="button"
-            aria-label="Attach a video"
-            title="Attach a video"
-            onClick={() => openPicker('video/*')}
-            disabled={disabled || sending}
-            className="focus-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet/40 bg-violet/15 text-violet-bright transition hover:bg-violet/25 disabled:opacity-50">
-            <VideoIcon size={18} />
+            <PlusIcon size={20} />
           </button>
 
           {canRecord ? (
@@ -379,7 +481,7 @@ const Composer = ({
               aria-label="Record a voice note"
               title="Record a voice note"
               onClick={recorder.start}
-              disabled={disabled || sending || !!pending}
+              disabled={disabled || sending}
               className="focus-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan/40 bg-cyan/15 text-cyan transition hover:bg-cyan/25 disabled:opacity-40">
               <MicIcon size={18} />
             </button>
@@ -388,7 +490,7 @@ const Composer = ({
           <textarea
             ref={textRef}
             value={text}
-            onChange={event => setText(event.target.value.slice(0, maxLength))}
+            onChange={event => setText(event.target.value)}
             onKeyDown={event => {
               if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
                 event.preventDefault();
@@ -421,31 +523,63 @@ const Composer = ({
         </div>
       )}
 
+      {/* `multiple` is the whole point: a mixed batch is one pick, and the
+          accept is wide enough that the gallery shows pictures and video in the
+          same list. */}
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,video/*"
+        multiple
         className="hidden"
         onChange={event => {
-          pickFile(event.target.files?.[0]);
+          pickFiles(event.target.files);
           // Reset, so picking the same file twice still fires a change.
           event.target.value = '';
         }}
       />
 
-      <div className="mt-1 flex items-center justify-between px-1">
+      <div className="mt-1 flex items-center justify-between gap-3 px-1">
         <span className="text-[11px] text-ink-subtle">
-          {canRecord
-            ? '⌘/Ctrl + Enter sends · the mic records live, the rest are files'
-            : '⌘/Ctrl + Enter sends'}
+          {sending && progress
+            ? `Uploading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
+            : canRecord
+            ? '⌘/Ctrl + Enter sends · + takes pictures and video, the mic records live'
+            : '⌘/Ctrl + Enter sends · + takes pictures and video'}
         </span>
-        {nearlyFull ? (
-          <span
-            className={`text-[11px] ${text.length >= maxLength ? 'text-danger' : 'text-ink-muted'}`}>
-            {text.length}/{maxLength}
-          </span>
-        ) : null}
+        <span className="shrink-0 text-[11px] text-ink-subtle">
+          {text.trim().length ? `${text.trim().length} characters · no limit` : ''}
+        </span>
       </div>
+
+      {watching ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Video"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6 backdrop-blur-sm"
+          onClick={() => setWatching(null)}>
+          <div className="relative w-full max-w-3xl">
+            <video
+              src={watching.preview}
+              controls
+              autoPlay
+              playsInline
+              className="max-h-[80vh] w-full rounded-xl2 border border-white/15 bg-black"
+            />
+            <p className="mt-2 text-center text-xs text-ink-muted">
+              {watching.file.name} · {fileSize(watching.bytes)} · not sent yet
+            </p>
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={() => setWatching(null)}
+              className="focus-ring absolute -right-2 -top-2 rounded-full border border-white/15 bg-base p-1.5 text-ink">
+              <CloseIcon size={16} />
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

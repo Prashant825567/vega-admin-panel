@@ -223,15 +223,24 @@ export const queryAll = async <T>(
   return {documents, truncated};
 };
 
-/** Writes one document and hands back the stored record. */
+/**
+ * Writes one document and hands back the stored record.
+ *
+ * `id` is optional and is the store's own facility, not ours: a document may be
+ * created under a name the caller chooses, and a second attempt at the same name
+ * is refused with `409 DOCUMENT_ALREADY_EXISTS` rather than making a second copy.
+ * Anything that has to exist exactly once — a heartbeat, a settings row — is a
+ * lot simpler to keep that way with a fixed id than by looking itself up.
+ */
 export const createDocument = async <T extends object>(
   collection: string,
   data: T,
+  id?: string,
 ): Promise<ZtDocument<T>> => {
   const res = await call(`/v1/data/${collection}`, {
     method: 'POST',
     json: true,
-    body: JSON.stringify({data}),
+    body: JSON.stringify(id ? {id, data} : {data}),
   });
   return (await res.json()) as ZtDocument<T>;
 };

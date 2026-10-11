@@ -15,15 +15,18 @@ type IconProps = {
 const Svg = ({
   size = 18,
   className,
+  // Only the few icons that are one straight line or two need to say; the rest
+  // are drawn for the default.
+  strokeWidth = 1.7,
   children,
-}: IconProps & {children: ReactNode}) => (
+}: IconProps & {children: ReactNode; strokeWidth?: number}) => (
   <svg
     width={size}
     height={size}
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    strokeWidth={1.7}
+    strokeWidth={strokeWidth}
     strokeLinecap="round"
     strokeLinejoin="round"
     className={className}
@@ -85,6 +88,20 @@ export const SendIcon = (props: IconProps) => (
   <Svg {...props}>
     <path d="M4.5 12 20 5l-4.2 15L12 14z" />
     <path d="M12 14l8-9" />
+  </Svg>
+);
+
+/**
+ * The attach button: one plus, for every kind of file.
+ *
+ * There used to be an image icon and a video icon side by side, each opening the
+ * picker already filtered. One plus is both — the dialog opens on the gallery and
+ * accepts pictures and recordings together, so a mixed send is one gesture
+ * instead of two.
+ */
+export const PlusIcon = (props: IconProps) => (
+  <Svg {...props} strokeWidth={2}>
+    <path d="M12 5v14M5 12h14" />
   </Svg>
 );
 
