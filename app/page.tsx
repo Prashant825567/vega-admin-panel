@@ -212,8 +212,17 @@ const App = () => {
         />
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-          {/* The header: who we are, how many are online, and one refresh. */}
-          <header className="glass rim sheen relative flex flex-wrap items-center gap-3 p-3">
+          {/* The header: who we are, how many are online, and one refresh.
+
+              On a phone it stands down while a keyboard is up. It is two rows
+              of chrome there — a hundred and ten pixels of brand, search and a
+              count — and the strip a keyboard leaves is the strip the
+              conversation and the box being typed into have to share. The
+              search field is a click away the moment the keyboard closes. */}
+          <header
+            className={`glass rim sheen relative flex-wrap items-center gap-3 p-3 ${
+              keyboard.open ? 'hidden md:flex' : 'flex'
+            }`}>
             <div className="flex items-center gap-2.5">
               <span
                 className="flex h-9 w-9 items-center justify-center rounded-xl text-sm font-black text-white"
