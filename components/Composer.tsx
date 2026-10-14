@@ -73,6 +73,12 @@ type ComposerProps = {
    */
   onSend: (text: string, attachments: SentAttachment[]) => Promise<number>;
   onError: (message: string) => void;
+  /**
+   * The box was typed in — the empty string means it was emptied. The screen
+   * turns this into the "typing…" the app reads; the composer itself only
+   * reports, so where that goes stays the screen's business.
+   */
+  onTyping?: (draft: string) => void;
   disabled?: boolean;
   /** Broadcast needs a louder button than a reply does. */
   sendLabel?: string;
@@ -124,6 +130,7 @@ const Composer = ({
   placeholder,
   onSend,
   onError,
+  onTyping,
   disabled = false,
   sendLabel,
 }: ComposerProps) => {
@@ -291,6 +298,9 @@ const Composer = ({
       // Whatever the caller did not claim belongs to no message: take it back.
       await dropOrphans(uploaded.slice(claimed));
       setText('');
+      // Sent is the end of "typing…", and saying so with the send rather than
+      // with the next edit is what keeps the app's header honest.
+      onTyping?.('');
       clearPending();
       textRef.current?.focus();
     } catch (error) {
@@ -309,6 +319,7 @@ const Composer = ({
     dropOrphans,
     onError,
     onSend,
+    onTyping,
     pending,
     sending,
     text,
@@ -321,7 +332,10 @@ const Composer = ({
   const readyBytes = pending.reduce((total, item) => total + item.bytes, 0);
 
   return (
-    <div className="glass sheen relative p-3">
+    // `shrink-0`: the composer is the one thing in the thread that must never be
+    // squeezed out of the column, however much conversation is above it. The
+    // message list is the piece that flexes (ThreadView).
+    <div className="glass sheen relative shrink-0 p-3">
       {pending.length ? (
         <div className="glass-soft mb-2 p-2">
           <div className="mb-2 flex items-center justify-between gap-3">
@@ -490,7 +504,10 @@ const Composer = ({
           <textarea
             ref={textRef}
             value={text}
-            onChange={event => setText(event.target.value)}
+            onChange={event => {
+              setText(event.target.value);
+              onTyping?.(event.target.value);
+            }}
             onKeyDown={event => {
               if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
                 event.preventDefault();

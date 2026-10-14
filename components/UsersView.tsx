@@ -1,7 +1,7 @@
 'use client';
 
 import {useCallback, useEffect, useMemo, useState} from 'react';
-import type {KnownUser} from '@/lib/contract';
+import {USERS_POLL_MS, type KnownUser} from '@/lib/contract';
 import {getUsers} from '@/lib/api';
 import {displayNameOf, initialsOf, relativeTime} from '@/lib/format';
 import {usePoll} from '@/hooks/usePoll';
@@ -63,7 +63,11 @@ const UsersView = ({onOpenChat, refreshSignal}: UsersViewProps) => {
     }
   }, []);
 
-  const refresh = usePoll(() => load(), 30_000);
+  // The roster carries an online dot per row, so this tick is a presence tick:
+  // ten seconds keeps the dots honest without re-reading Firestore as often as
+  // the inbox re-reads the store (the inbox is watching a live conversation,
+  // this is a list of people).
+  const refresh = usePoll(() => load(), USERS_POLL_MS);
 
   useEffect(() => {
     if (refreshSignal) {

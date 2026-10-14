@@ -25,14 +25,71 @@ export const BROADCAST_LIMIT = 20;
 /** Ceiling on a full-table walk, so a runaway query cannot hammer the store. */
 export const SCAN_LIMIT = 5000;
 
-/** An account counts as online while its heartbeat is inside this window. */
-export const ONLINE_WINDOW_MS = 60_000;
-/** How often the panel rewrites its own heartbeat. */
-export const HEARTBEAT_MS = 20_000;
-/** How often an open inbox re-reads the store. */
-export const INBOX_POLL_MS = 15_000;
-/** How often an open thread re-reads, so a receipt turns blue on its own. */
-export const THREAD_POLL_MS = 10_000;
+/**
+ * An account counts as online while its heartbeat is inside this window.
+ *
+ * Three beats of {@link HEARTBEAT_MS}, because the store is not a socket: the
+ * phone rewrites one document and the reader has to work out the rest. Three
+ * missed beats is a real disappearance; one is a tunnel.
+ *
+ * This is the **backstop**, not the answer — an app that knows it is leaving
+ * writes `away: true` (see `WirePresence`), which takes it off the roster at
+ * once. The window only decides the case nobody can announce: a phone that was
+ * killed, force-stopped or lost its network mid-beat.
+ */
+export const ONLINE_WINDOW_MS = 12_000;
+/**
+ * How often the panel rewrites its own heartbeat.
+ *
+ * This is also how long the app's "Online now" can lag behind the panel being
+ * opened, and how long a closed panel stays on that header: the beat *is* the
+ * presence signal in both directions. Four seconds is short enough to read as
+ * instant and still one small PATCH each time.
+ */
+export const HEARTBEAT_MS = 4_000;
+/**
+ * How often an open inbox re-reads the store.
+ *
+ * This is the panel's delivery latency: an inbox cannot show a message that has
+ * not been asked for. Three seconds is inside the "it just appeared" range,
+ * and the pause while the tab is hidden means a background tab is not paying
+ * for it (see hooks/usePoll).
+ */
+export const INBOX_POLL_MS = 3_000;
+/**
+ * How often an open thread re-reads, so a receipt turns blue on its own.
+ *
+ * The thread on screen is where the team is actually looking, so it ticks
+ * faster than the inbox — a loaded thread is also the one where a stale "sent"
+ * tick is most obviously wrong.
+ */
+export const THREAD_POLL_MS = 2_500;
+/**
+ * How often the roster and the dashboard re-read.
+ *
+ * Slower than the two above on purpose: both carry an online dot, so they are
+ * presence ticks rather than conversation ticks, and the roster also reads
+ * Firestore on every call. Ten seconds is well inside the window an eye notices
+ * for a list of people, and it keeps the panel's own users collection out of the
+ * fast loop.
+ */
+export const USERS_POLL_MS = 10_000;
+export const PULSE_POLL_MS = 10_000;
+
+/**
+ * The collection "typing…" documents live in, and how long one of them lasts.
+ *
+ * Both sides write one document per (thread, side) and read the other's: the
+ * phone says `user`, the panel says `admin`, and neither ever reads its own. It
+ * is a fact with an expiry date rather than a flag to clear, which is what makes
+ * a composer abandoned mid-sentence stop saying so on its own. Served by the
+ * store's hot store, never a Telegram channel — see lib/server/typing.ts.
+ *
+ * Lives here, and not in the server module that uses it, because the panel's
+ * browser half needs the number too and must not import the API key with it.
+ */
+export const TYPING = 'typing';
+export const TYPING_MS = 6_000;
 
 export type ZtDocument<T> = {
   id: string;
@@ -182,6 +239,16 @@ export type WirePresence = {
    * the email's own first half rather than showing a blank row.
    */
   name?: string | null;
+  /**
+   * The account is leaving — backgrounded or signing out — right now.
+   *
+   * `last_seen` alone can only say "was here a moment ago", which is why an
+   * app that *can* tell us it is going away writes this instead of waiting for
+   * the window to expire: the goodbye is what makes "Offline" instant rather
+   * than up to {@link ONLINE_WINDOW_MS} late. Absent on older documents and on
+   * ordinary heartbeats, and absent means "here".
+   */
+  away?: boolean;
 };
 
 /** The thread this account talks to the team in. Lowercase, always. */
@@ -274,6 +341,12 @@ export type PresenceEntry = {
   device?: string;
   /** As above: the app's own name for them, when it has one. */
   name: string | null;
+  /**
+   * The account said it is gone. A reader must treat it as offline whatever
+   * `last_seen` says — and the one place that still lists such a row (the
+   * roster, which is a history and not a status) reads this to say so.
+   */
+  away: boolean;
 };
 
 /**

@@ -11,8 +11,14 @@ import UsersView from '@/components/UsersView';
 import PulseView from '@/components/PulseView';
 import {RefreshIcon, SearchIcon} from '@/components/icons';
 import {HEARTBEAT_MS} from '@/lib/contract';
-import {announcePanel, getPresence, type PresencePayload} from '@/lib/api';
+import {
+  announcePanel,
+  announcePanelAway,
+  getPresence,
+  type PresencePayload,
+} from '@/lib/api';
 import {usePoll} from '@/hooks/usePoll';
+import {useKeyboard} from '@/hooks/useKeyboard';
 
 /**
  * The console itself: the rail, the header, and whichever screen is open.
@@ -42,6 +48,9 @@ const App = () => {
   const [presence, setPresence] = useState<PresencePayload | null>(null);
   const [presenceError, setPresenceError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
+  // The strip of the page a phone is actually showing. Shut on a desktop, and
+  // shut on the server — see hooks/useKeyboard.
+  const keyboard = useKeyboard();
 
   const notify = useCallback((message: string, tone: 'ok' | 'danger' = 'ok') => {
     setToast({id: Date.now(), message, tone});
@@ -54,6 +63,36 @@ const App = () => {
     const timer = setTimeout(() => setToast(null), 4500);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  /**
+   * Say goodbye the moment the console stops being looked at.
+   *
+   * The heartbeat below stops while the tab is hidden (hooks/usePoll does not
+   * poll what nobody is reading), and without this the phone app would keep
+   * showing "Online now" until the window expired — a panel that is closed is
+   * the one presence question the panel itself can answer instantly.
+   *
+   * `pagehide` is the reliable one (it fires for a close, a reload and a
+   * navigation away, where `unload` is not dependable on mobile browsers), and
+   * `visibilitychange` covers the tab switch, which is the same thing as far as
+   * "is anybody at the keyboard" goes. Coming back re-beats at once — the hook
+   * refreshes on the way in — so being briefly hidden costs nothing.
+   */
+  useEffect(() => {
+    const leave = () => announcePanelAway();
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') {
+        leave();
+      }
+    };
+    window.addEventListener('pagehide', leave);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('pagehide', leave);
+      document.removeEventListener('visibilitychange', onHidden);
+      leave();
+    };
+  }, []);
 
   /**
    * One round of presence: write our own heartbeat, then read who is around.
@@ -124,12 +163,44 @@ const App = () => {
   );
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
+    // The console is exactly one viewport tall and never scrolls as a whole:
+    // every screen scrolls inside itself. `100dvh` is the small-viewport height
+    // on a phone (browser chrome included), which is what stops the composer
+    // from ending up under the address bar — and the `h-screen` class is the
+    // fallback for a browser that does not know `dvh` at all.
+    //
+    // It is `fixed` on purpose: a page in normal flow can be scrolled by the
+    // browser itself — and a mobile browser opening a keyboard is exactly when
+    // it does that — which carried the header off the top and the composer off
+    // the bottom of a console that is not supposed to scroll at all. Pinned, and
+    // with the document's own overflow hidden (globals.css), nothing outside
+    // this box can move it. While a keyboard is up the box shrinks to the strip
+    // above it, so the composer rises with the keyboard the way a messenger's
+    // does, instead of hiding underneath it.
+    <div
+      className="fixed inset-x-0 top-0 flex h-screen flex-col overflow-hidden"
+      style={
+        keyboard.open
+          ? {top: keyboard.top, height: keyboard.height}
+          : {height: '100dvh'}
+      }>
       <AmbientBackground />
 
-      <div className="mx-auto flex w-full max-w-[1600px] flex-1 gap-4 p-3 pb-24 md:p-4 md:pb-4">
+      {/* `min-h-0` is load-bearing: without it this row is free to grow past the
+          viewport to fit its tallest child, and everything below the fold — the
+          composer first — is what pays for it. The bottom padding clears the
+          mobile nav, which floats 12px off the bottom edge. */}
+      <div
+        className={`mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 gap-4 p-3 md:p-4 md:pb-4 ${
+          // The 6rem clears the floating mobile nav — except while a keyboard is
+          // up, when that nav is out of the way and every pixel is the thread's.
+          keyboard.open
+            ? 'pb-3'
+            : 'pb-[calc(6rem+env(safe-area-inset-bottom))]'
+        }`}>
         <Rail
           active={view}
+          navHidden={keyboard.open}
           onChange={next => {
             setView(next);
             if (next !== 'inbox') {
@@ -219,7 +290,9 @@ const App = () => {
                     />
                   </div>
                 </div>
-                <div className="min-h-0 min-w-0 flex-1">{thread}</div>
+                {/* A flex box, so the thread stretches to the row's height
+                    instead of being measured by its own content. */}
+                <div className="flex min-h-0 min-w-0 flex-1">{thread}</div>
               </div>
             ) : (
               <div className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">

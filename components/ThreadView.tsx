@@ -1,10 +1,11 @@
 'use client';
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {THREAD_POLL_MS, isMediaPlaceholder} from '@/lib/contract';
+import {THREAD_POLL_MS, TYPING_MS, isMediaPlaceholder} from '@/lib/contract';
 import type {SentAttachment} from '@/lib/contract';
 import type {ThreadMessage} from '@/lib/api';
 import {
+  announceTyping,
   deleteMessage,
   getThread,
   hideMessage,
@@ -166,6 +167,10 @@ const ThreadView = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<Lightbox>(null);
+  /** The user is writing in the app's composer right now (see /api/typing). */
+  const [typing, setTyping] = useState(false);
+  /** When this panel last told the store it is typing, so it does not shout. */
+  const typingSentAt = useRef(0);
   /** The message whose delete is being decided, if any. */
   const [deleting, setDeleting] = useState<ThreadMessage | null>(null);
   /** The header shows a name until somebody asks who this actually is. */
@@ -181,6 +186,7 @@ const ThreadView = ({
       setMessages(result.messages);
       setEmail(result.email);
       setName(result.name ?? null);
+      setTyping(result.typing === true);
       setError(null);
       setLoading(false);
       return result;
@@ -193,6 +199,28 @@ const ThreadView = ({
 
   const refresh = usePoll(() => load(), THREAD_POLL_MS);
 
+  /**
+   * Tell the app we are writing back, but only now and then.
+   *
+   * The panel does not learn whether this worked, and does not want to: a typing
+   * indicator is a courtesy, so a failure here must not put a word on the screen
+   * of the person typing. Half the document's own lifetime is the interval —
+   * as long as words keep coming, the app's header never blinks off between
+   * them. An emptied box is the goodbye, sent straight away.
+   */
+  const noteTyping = useCallback(
+    (draft: string) => {
+      const empty = !draft.trim();
+      const now = Date.now();
+      if (!empty && now - typingSentAt.current < TYPING_MS / 2) {
+        return;
+      }
+      typingSentAt.current = empty ? 0 : now;
+      void announceTyping(chatId, !empty).catch(() => undefined);
+    },
+    [chatId],
+  );
+
   // A new thread is a new receipt ledger.
   useEffect(() => {
     receipted.current = new Set();
@@ -200,6 +228,13 @@ const ThreadView = ({
     setLoading(true);
     setError(null);
     setShowEmail(false);
+  }, [chatId]);
+
+  /** Leaving a thread is not typing in it — the app's header should say so. */
+  useEffect(() => {
+    return () => {
+      void announceTyping(chatId, false).catch(() => undefined);
+    };
   }, [chatId]);
 
   useEffect(() => {
@@ -308,7 +343,12 @@ const ThreadView = ({
   }, [deleting, notify]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    // `flex-1 min-h-0`, not `h-full`: the thread is a row of three stacked
+    // pieces (header, scrolling messages, composer) that together are exactly as
+    // tall as the space it was given. `min-h-0` is what lets the message list
+    // *scroll* rather than stretch, and `flex-1` is what keeps the composer
+    // inside the viewport when a thread runs to a thousand messages.
+    <div className="flex h-full min-h-0 flex-1 flex-col gap-3">
       {/* Who you are talking to, and the way back. */}
       <div className="glass sheen relative flex items-center gap-3 p-3">
         <button
@@ -339,8 +379,14 @@ const ThreadView = ({
             {showEmail ? (
               <span className="text-violet-bright">{email} · </span>
             ) : null}
-            {online ? 'In the app now' : 'Last heartbeat over a minute ago'} ·{' '}
-            {messages.length} messages
+            {/* Typing beats the heartbeat: one line, and the more useful fact
+                is that a reply is being written. */}
+            {typing
+              ? 'typing…'
+              : online
+              ? 'In the app now'
+              : 'Last heartbeat over a minute ago'}{' '}
+            · {messages.length} messages
             {unreadHere > 0 ? ` · ${unreadHere} just marked read` : ''}
           </p>
         </div>
@@ -409,6 +455,7 @@ const ThreadView = ({
         placeholder={`Reply to ${displayNameOf(email, name)}…`}
         onSend={send}
         onError={message => notify(message, 'danger')}
+        onTyping={noteTyping}
       />
 
       {deleting ? (

@@ -79,6 +79,8 @@ export const getThread = (chatId: string) =>
     /** What the app calls them, when it has told us. */
     name: string | null;
     messages: ThreadMessage[];
+    /** They have the box open and are writing in it right now. */
+    typing: boolean;
     truncated: boolean;
   }>(`/api/thread?chatId=${encodeURIComponent(chatId)}`);
 
@@ -259,6 +261,46 @@ export const getPresence = () => request<PresencePayload>('/api/presence');
 /** The panel's own heartbeat, so the app can show "Online now". */
 export const announcePanel = () =>
   request<{handle: string; lastSeen: number}>('/api/presence', {method: 'POST'});
+
+/**
+ * The goodbye, fired while the tab is closing.
+ *
+ * This is deliberately **not** a `fetch`: a request issued from an unload handler
+ * is cancelled with the page in most browsers, which is why the platform has
+ * `sendBeacon` — the browser takes ownership of the send and delivers it after
+ * the document is gone. It is not awaited and its result is not read, because
+ * there is nothing left to read it in.
+ *
+ * If the beacon is refused (an old browser, an offline laptop), the app is
+ * exactly where it was before this existed: it waits out the heartbeat window.
+ * So the failure mode of the fast path is the slow path, never a wrong answer
+ * that stays wrong.
+ */
+export const announcePanelAway = (): void => {
+  const url = '/api/presence?away=1';
+  try {
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      navigator.sendBeacon(url);
+      return;
+    }
+  } catch {
+    // Fall through to the fetch below.
+  }
+  void fetch(url, {method: 'POST', keepalive: true}).catch(() => undefined);
+};
+
+/**
+ * "I am writing in this thread" — the beat that turns the app's header into
+ * "typing…". Called at most once every second or so by the composer; the panel
+ * does not learn whether it worked, because there is nothing to tell the person
+ * at the keyboard about their own typing indicator.
+ */
+export const announceTyping = (chatId: string, typing = true) =>
+  request<{ok: boolean; windowMs: number}>('/api/typing', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({chatId, typing}),
+  });
 
 export const getPulse = () =>
   request<Pulse & {capped: boolean}>('/api/pulse');

@@ -26,6 +26,17 @@
 html,
 body {
   height: 100%;
+  /*
+   * The console owns every scrollbar it has: the document itself never scrolls.
+   *
+   * A page that can scroll is a page a mobile browser is free to scroll on its
+   * own — and the moment it opens a keyboard to follow a textarea, that is
+   * exactly what it does, carrying the header off the top of the screen and the
+   * composer off the bottom with no way back. Every list in here is its own
+   * scroll container, so nothing is lost by refusing it.
+   */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {

@@ -71,6 +71,9 @@ const toEntry = (doc: {id: string; data?: WirePresence}): PresenceEntry | null =
     lastSeen,
     device: doc.data?.device || undefined,
     name: (doc.data?.name || '').trim() || null,
+    // Absent on everything written before the field existed, and absent means
+    // "here" — so an old document is never mistaken for a goodbye.
+    away: doc.data?.away === true,
   };
 };
 
@@ -152,7 +155,11 @@ export const listOnline = async (
   return freshestPerUser(
     documents
       .map(toEntry)
-      .filter((entry): entry is PresenceEntry => entry !== null),
+      .filter((entry): entry is PresenceEntry => entry !== null)
+      // A goodbye outranks a fresh timestamp: the account is gone, and "online"
+      // says it is here now. This is the whole difference between an offline
+      // that shows up in a second and one that shows up a window later.
+      .filter(entry => !entry.away),
   ).sort((a, b) => b.lastSeen - a.lastSeen);
 };
 
@@ -199,7 +206,9 @@ export const listKnownUsers = async (): Promise<{
         name: entry.name,
         lastSeen: entry.lastSeen,
         device: entry.device,
-        online: now - entry.lastSeen < ONLINE_WINDOW_MS,
+        // Away is read here too: the roster is a history, so the row stays —
+        // it just stops claiming the app is open.
+        online: !entry.away && now - entry.lastSeen < ONLINE_WINDOW_MS,
         chatId: chatIdFor(entry.user),
         messages: 0,
       }),
@@ -231,7 +240,14 @@ export const listKnownUsers = async (): Promise<{
  *   the other half of the same story — another instance of the panel beat us to
  *   it, so the document exists and the next beat patches it.
  */
-export const announcePanel = async (): Promise<{handle: string; lastSeen: number}> => {
+export const announcePanel = async (
+  /**
+   * Write the goodbye instead of a hello. The panel sends this when its tab is
+   * being closed or hidden, so the app's "Online now" header turns off at once
+   * rather than after {@link ONLINE_WINDOW_MS} with nobody at the keyboard.
+   */
+  away: boolean = false,
+): Promise<{handle: string; lastSeen: number}> => {
   const handle = panelHandle();
   const id = panelDocumentId(handle);
   const wire: WirePresence = {
@@ -239,6 +255,7 @@ export const announcePanel = async (): Promise<{handle: string; lastSeen: number
     role: 'panel',
     last_seen: new Date().toISOString(),
     device: 'web',
+    away: away === true,
   };
   const lastSeen = Date.parse(wire.last_seen as string);
 

@@ -23,6 +23,14 @@ type RailProps = {
   onChange: (view: ViewKey) => void;
   unread: number;
   online: number;
+  /**
+   * A keyboard is up on a phone: the bottom bar steps aside.
+   *
+   * It floats over the page rather than sitting in the flow, so while the user
+   * is answering a chat it would be sitting exactly on top of the composer they
+   * are typing into. The thread is what the screen is for at that moment.
+   */
+  navHidden?: boolean;
 };
 
 const ITEMS: {
@@ -37,7 +45,7 @@ const ITEMS: {
   {key: 'pulse', label: 'Pulse', Icon: PulseIcon},
 ];
 
-const Rail = ({active, onChange, unread, online}: RailProps) => {
+const Rail = ({active, onChange, unread, online, navHidden = false}: RailProps) => {
   const badgeFor = (key: ViewKey): number | null => {
     if (key === 'inbox' && unread > 0) {
       return unread;
@@ -98,7 +106,9 @@ const Rail = ({active, onChange, unread, online}: RailProps) => {
       {/* Mobile: the same five, along the bottom where a thumb is. */}
       <nav
         aria-label="Sections"
-        className="glass sheen fixed inset-x-3 bottom-3 z-40 flex items-center justify-around py-2 md:hidden">
+        className={`glass sheen fixed inset-x-3 bottom-3 z-40 items-center justify-around py-2 md:hidden ${
+          navHidden ? 'hidden' : 'flex'
+        }`}>
         {ITEMS.map(({key, label, Icon}) => {
           const isActive = active === key;
           const badge = badgeFor(key);

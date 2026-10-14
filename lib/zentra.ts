@@ -30,7 +30,7 @@
 import {ZtDocument, ZtWhere} from './contract';
 
 /** Data and files live on the same host. */
-export const ZENTRAGRID_BASE = 'https://zentragrid.onrender.com';
+export const ZENTRAGRID_BASE = 'https://vega-storage.onrender.com';
 
 /** No call may hang a screen forever. Uploads and downloads get their own budget. */
 const TIMEOUT_MS = 15_000;

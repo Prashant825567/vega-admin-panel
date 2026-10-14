@@ -1,7 +1,7 @@
 'use client';
 
 import {useState} from 'react';
-import type {Pulse} from '@/lib/contract';
+import {PULSE_POLL_MS, type Pulse} from '@/lib/contract';
 import {getPulse} from '@/lib/api';
 import {usePoll} from '@/hooks/usePoll';
 import StatTile from './StatTile';
@@ -88,7 +88,9 @@ const PulseView = ({online}: PulseViewProps) => {
   const [pulse, setPulse] = useState<(Pulse & {capped: boolean}) | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  usePoll(() => getPulse(), 20_000, {
+  // Same clock as the roster: this screen exists to say what is happening in
+  // the app right now, and a number that is twenty seconds old is not that.
+  usePoll(() => getPulse(), PULSE_POLL_MS, {
     onResult: result => {
       setPulse(result);
       setLoaded(true);

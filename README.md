@@ -17,7 +17,7 @@ call happens in this app's own `/api/*` routes.
 Everything lives in the same hosted JSON store the phone app writes to:
 
 ```
-https://zentragrid.onrender.com          Authorization: Bearer <ZENTRAGRID_API_KEY>
+https://vega-storage.onrender.com          Authorization: Bearer <ZENTRAGRID_API_KEY>
 ```
 
 Two collections, and nothing else:
